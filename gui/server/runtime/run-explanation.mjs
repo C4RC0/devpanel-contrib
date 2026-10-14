@@ -1,0 +1,462 @@
+import { checksOnlyBlock } from './run-control.mjs'
+import { runResult } from './run-result.mjs'
+
+// Where a run stands, in words a person reads once and acts on.
+//
+// Every other field on a run is a record: a status, a reason code, closure
+// conditions keyed by name. Those stay the source of truth and stay on screen
+// under "technical details". This module only translates them:
+//
+//   headline  what happened, in one short line
+//   detail    why, in a sentence or two, using the run's own evidence where it
+//             has any (the coordinator's reasoning)
+//   cause     the recorded error text, verbatim, when there is one: evidence
+//             for whoever fixes it, shown apart from the explanation
+//   kept      what survives, so nobody fears that pressing a button loses work
+//   next      what a person can do about it
+//   unmet     the specific things that were not satisfied, each with evidence
+//   tone      progress | waiting | success | warning | error | neutral
+//
+// It never decides anything. Actions a page may offer come from the run's
+// supportedActions; `next` names them in prose and a page shows the buttons.
+
+const ROLE = (role) => {
+  if (!role) return 'an agent'
+  if (role === 'coordinator') return 'the coordinator'
+  if (role === 'operator') return 'the operator'
+  const numbered = /^(auditor|verifier|analyser)-(\d+)$/.exec(role)
+  if (numbered) return `${{ auditor: 'reviewer', verifier: 'verifier', analyser: 'analyst' }[numbered[1]]} ${numbered[2]}`
+  return {
+    author: 'the author', implementer: 'the implementer', worker: 'the worker', planner: 'the planner',
+    auditor: 'the reviewer', investigator: 'the investigator', analyser: 'the analyst', 'release-operator': 'the release operator'
+  }[role] ?? `the ${role.replace(/-/g, ' ')}`
+}
+const Cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+const firstLine = (text, max = 300) => {
+  const line = String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+const BUDGET = { maxSteps: 'turn limit', maxTokens: 'token limit', wallClockMinutes: 'time limit', maxCostUsd: 'cost limit' }
+
+/** The budget that ran out, judged from the record; null when none plainly did. */
+function spentBudget (run) {
+  const limits = run.budgets?.limits ?? {}
+  const used = run.budgets?.used ?? {}
+  if (limits.maxSteps && (used.steps ?? 0) >= limits.maxSteps) return 'maxSteps'
+  if (limits.maxTokens && (used.tokens ?? 0) >= limits.maxTokens) return 'maxTokens'
+  if (limits.maxCostUsd && (used.costUsd ?? 0) >= limits.maxCostUsd) return 'maxCostUsd'
+  if (limits.wallClockMinutes) return 'wallClockMinutes'
+  return null
+}
+
+/** The latest valid closure confirmation among the outputs we were given. */
+function latestConfirmation (outputs) {
+  const entries = Object.entries(outputs ?? {})
+    .filter(([, o]) => o?.valid && o.contract === 'closureConfirmation')
+    .sort(([a], [b]) => Number(a) - Number(b))
+  return entries.at(-1)?.[1]?.output ?? null
+}
+
+/**
+ * A launch refusal is recorded as the refusal text itself. The common ones are
+ * about the project checkout, and each has a known remedy.
+ */
+function launchFailure (text) {
+  const raw = String(text ?? '')
+  let m
+  if ((m = /requires a clean checkout, but (\d+) tracked path/.exec(raw))) {
+    return {
+      headline: "Couldn't start: the project has uncommitted changes",
+      detail: `${plural(Number(m[1]), 'file')} in the project differ from its last commit, and this project is set to start runs from the last commit only.`,
+      next: 'Commit the changes (the Push action on the project page), or set the project to start runs from the working tree as it is.'
+    }
+  }
+  if (/symlink\(s\) in the checkout point outside it/.test(raw)) {
+    const link = /\(([^()]*->[^()]*)\)/.exec(raw)?.[1]
+    return {
+      headline: "Couldn't start: a link in the project points outside it",
+      detail: `${link ? `${link}: a` : 'A'}n agent writing through such a link would change files outside the project.`,
+      next: "Set the project's symlink policy to copy the link targets (materialize) or to allow them."
+    }
+  }
+  if ((m = /unsupported (?:tracked )?source entry: (.+)$/m.exec(raw))) {
+    return {
+      headline: "Couldn't start: the project holds something a run can't copy",
+      detail: `${m[1].trim()} is a socket, device or nested repository, and a run's private copy of the project cannot contain it.`,
+      next: 'Exclude it in the project settings (workspace excludes), or remove it from the project.'
+    }
+  }
+  if (/dubious ownership/.test(raw)) {
+    return {
+      headline: "Couldn't start: Git refuses to read the project folder",
+      detail: 'The folder belongs to a different user than the panel, and Git treats that as unsafe.',
+      next: 'Fix the folder ownership, or mark it as safe for Git (git config --global --add safe.directory …).'
+    }
+  }
+  if (/rev-parse HEAD|not a git repository|EMPTY_REPOSITORY|does not have any commits/i.test(raw)) {
+    return {
+      headline: "Couldn't start: the project is not a usable Git repository",
+      detail: 'A run needs a project with at least one commit to start from.',
+      next: 'Initialise the repository and make a first commit, then start again.'
+    }
+  }
+  return null
+}
+
+function failed (run) {
+  const f = run.failure
+  if (f) {
+    const who = f.role ? ROLE(f.role) : 'an agent'
+    const model = f.availability?.modelId ?? run.participants?.[f.role]?.model ?? null
+    const said = firstLine(f.message)
+    switch (f.class) {
+      case 'auth':
+        return { headline: `Stopped: ${who}'s AI tool is not signed in`, detail: `The login${model ? ` for ${model}` : ''} is missing or expired.`, cause: said || null, next: 'Sign that account in again, then start a new run.' }
+      case 'quota':
+        return { headline: `Stopped: ${model ?? 'a model'} reached its usage limit`,
+          detail: f.availability?.exhaustedUntil ? `It is unavailable until ${f.availability.exhaustedUntil}; runs naming it are refused until then.` : null,
+          cause: said || null,
+          next: 'Wait for the limit to reset, or start a new run with a different model for that seat.' }
+      case 'rate-limit':
+      case 'transient':
+        return { headline: 'Stopped: the AI provider kept refusing requests', detail: f.retries ? `Retried ${plural(f.retries, 'time')} first.` : null, cause: said || null, next: 'Start a new run later; the provider was busy or limiting requests.' }
+      case 'environment':
+        return { headline: `Stopped: ${who}'s AI tool could not run on this host`, cause: said || null, next: 'Fix the host problem named above, then start a new run.' }
+      default:
+        return { headline: `Stopped: ${who}'s AI tool crashed`, cause: said || null, next: 'Start a new run; if it happens again, try another model for that seat.' }
+    }
+  }
+  if (run.blockedReason === 'preflight-refused') {
+    // The first line of the refusal only says that it refused; the lines after
+    // it name the tool and model that failed.
+    const lines = String(run.preflight?.detail ?? '').split('\n').map((l) => l.trim()).filter((l) => l && !/^refusing to launch/.test(l))
+    return { headline: "Couldn't start: the AI tools failed their pre-start check", detail: 'No agent was run.', cause: lines.join('\n') || null, next: 'Fix what the check reported (a login, an install, a model name), then start again.' }
+  }
+  const launch = launchFailure(run.blockedReason)
+  if (launch) return launch
+  return { headline: 'Stopped with an error', detail: run.blockedReason ? null : 'No reason was recorded.', cause: firstLine(run.blockedReason, 600) || null, next: 'Start a new run once the cause is fixed.' }
+}
+
+/**
+ * Which check failures stopped a run: the new ones by name, beside how many
+ * the unchanged base has too; or why the base comparison could not be made.
+ * Without a comparison (older records), the failing required commands.
+ */
+function checkFailureWords (failures, commands = []) {
+  const name = (x) => x.test === '(command)' ? x.command : `${x.command}: ${x.test}`
+  if (failures?.verdict === 'new-failures') {
+    const known = failures.baselineKnown?.length ?? 0
+    return `New failures: ${failures.newFailures.map(name).join(', ')}.${known ? ` ${plural(known, 'other failure')} also ${known === 1 ? 'occurs' : 'occur'} on the unchanged project and did not count.` : ''} `
+  }
+  if (failures?.verdict === 'not-made') return `The failures could not be compared with the unchanged project, so none counts as inherited: ${failures.reason}. `
+  const failed = commands.filter((c) => c.required !== false && !c.passed).map((c) => c.id)
+  return failed.length ? `Failing: ${failed.join(', ')}. ` : ''
+}
+
+/** Which selftests stopped a run: the new ones by name, or why they could not be compared. */
+function selftestWords (selftest) {
+  if (selftest?.verdict === 'new-failures') {
+    const known = selftest.baselineKnown?.length ?? 0
+    return `New selftest failures: ${selftest.newFailures.map((x) => x.test).join(', ')}.${known ? ` ${plural(known, 'other selftest failure')} also ${known === 1 ? 'occurs' : 'occur'} on the unchanged project and did not count.` : ''} `
+  }
+  if (selftest?.verdict === 'not-made') return `The selftest failures could not be compared with the unchanged project, so none counts as inherited: ${selftest.reason}. `
+  return ''
+}
+
+/** What the engine's automatic returns to the author did, in one sentence, or ''. */
+function returnWords (run) {
+  const returns = run.closureReturns ?? []
+  if (!returns.length) return ''
+  return `The engine returned it to the author ${returns.length === 1 ? 'once' : `${returns.length} times`} after closure (${[...new Set(returns.flatMap((r) => r.criteria.map((c) => c.id)))].join(', ')}).`
+}
+
+/** Why an unmet confirmation stayed with the operator instead of going back to the author. */
+function notReturnedWords (reason) {
+  if (!reason) return ''
+  if (reason === 'bound-reached') return 'It was not returned to the author again: the engine returns a run at most twice.'
+  const [id, kind] = reason.split(': ')
+  if (kind === 'unclassified') return `It was not returned to the author: ${id} is unmet without a classification.`
+  if (['live-checkout', 'owner-gate', 'authorization', 'requirement-conflict'].includes(kind)) return `It was not returned to the author: ${id} is a matter for you (${kind.replace('-', ' ')}).`
+  return `It was not returned to the author: ${reason}.`
+}
+
+/** Why closure did not happen, from the first condition that failed. */
+function closureUnmet (run, confirmation) {
+  const c = run.closure?.conditions ?? {}
+  const findings = (run.outstandingFindings ?? []).filter((f) => f.blocking)
+  if (c.reportDispositionRecorded === false) {
+    return { headline: 'Not finished: no report outcome was recorded', detail: 'The coordinator never recorded what the report concluded.', unmet: [] }
+  }
+  if (c.sameRevisionApproval === false) {
+    return { headline: 'Not finished: the final version was never approved', detail: 'Every reviewer has to approve the same, final version of the change; that did not happen.', unmet: [] }
+  }
+  if (c.checksSatisfied === false) {
+    const checks = run.closure?.checks
+    const words = (checks?.comparison ? checkFailureWords({ verdict: checks.comparison, reason: checks.reason, newFailures: checks.newFailures, baselineKnown: checks.baselineKnown }) : '') + selftestWords(checks?.selftest)
+    return { headline: 'Not finished: the automated checks did not pass', detail: words.trim() || 'The final version failed the project\'s checks, or they could not be run.', unmet: [] }
+  }
+  if (c.noOutstandingBlockingFindings === false) {
+    return {
+      headline: `Not finished: reviewers left ${plural(findings.length, 'blocking problem')} open`,
+      detail: 'A reviewer found problems that must be fixed before the change can be accepted.',
+      unmet: findings.map((f) => ({ id: f.id ?? null, text: f.description }))
+    }
+  }
+  if (c.coordinatorConfirmation === false) {
+    const criteria = confirmation?.criteria ?? []
+    const missed = criteria.filter((x) => x.met === false)
+    return {
+      headline: missed.length
+        ? `Not finished: ${plural(missed.length, 'goal')} of ${criteria.length} not met`
+        : 'Not finished: the coordinator did not sign off',
+      detail: firstLine(confirmation?.reasoning, 600) || 'The coordinator judged the result as not meeting the issue\'s goals.',
+      unmet: missed.map((x) => ({ id: x.id, text: x.evidence ?? null }))
+    }
+  }
+  return { headline: 'Not finished', detail: 'A condition for finishing was not met; the technical details list which.', unmet: [] }
+}
+
+const DELIVERY = {
+  'delivery-unavailable': {
+    headline: 'Approved, but there was nowhere to deliver it',
+    detail: 'No way of delivering the change is configured for this playbook.',
+    next: 'Fix the configuration, then Finalize.'
+  },
+  'delivery-unverifiable': {
+    headline: 'Approved, but the saved patch does not reproduce the change',
+    detail: 'Rebuilding the change from the patch gave a different result, so the patch is not a faithful copy.',
+    next: 'The workspace is kept. Fix the cause, then Finalize.'
+  },
+  'delivery-failed': {
+    headline: 'Approved, but delivering it failed',
+    next: 'The workspace is kept. Fix the cause, then Finalize.'
+  },
+  'candidate-changed-during-delivery': {
+    headline: 'Approved, but the change moved while it was being delivered',
+    detail: 'Something modified the workspace during delivery.',
+    next: 'Finalize to check again; the workspace is kept.'
+  },
+  'source-delivery-blocked': {
+    headline: 'Approved, but it could not be applied to your project',
+    detail: 'The project changed while the run was working, so the approved change no longer applies cleanly.',
+    next: 'Download the patch and apply it by hand, or start a new run against the current project.'
+  },
+  'source-delivery-interrupted': {
+    headline: 'Approved, but applying it to your project was interrupted',
+    next: 'Finalize checks the project and completes or reports what is left.'
+  }
+}
+
+/** Where a run stands, for a person. See the header for the fields. */
+export function explainRun (run, { outputs = {}, active = [] } = {}) {
+  if (!run) return null
+  if (run.landed) return landed(run, explainRun({ ...run, landed: undefined }, { outputs, active }))
+  const kept = run.workspace?.state === 'retained' ? 'Its workspace and logs are kept.' : 'Its logs are kept.'
+
+  // A step still marked in flight on a run that is no longer live: whatever it
+  // did is unknown. A panel restart has its own wording (recover), below.
+  const interrupted = !['pending', 'preflighting', 'running', 'stopping', 'paused'].includes(run.status) &&
+    !['recovery-required', 'owner-lost'].includes(run.blockedReason) &&
+    (run.journal?.recoveryRequired || Object.values(run.participants ?? {}).some((p) => p?.pendingInvocation || p?.state === 'recovery-required'))
+  if (interrupted) {
+    return { tone: 'warning', headline: 'Interrupted — needs recovery', kept,
+      detail: 'A step was still in progress when the run stopped, so its result is unknown.',
+      cause: firstLine(run.failure?.message ?? run.blockedReason) || null,
+      next: 'Abandon keeps the work and logs and lets you start a fresh run.' }
+  }
+
+  switch (run.status) {
+    case 'pending':
+    case 'preflighting':
+      return { tone: 'progress', headline: 'Starting', detail: 'Checking that the AI tools are installed and signed in before the first turn.' }
+    case 'running': {
+      const working = active.map((a) => ROLE(a.role))
+      const doing = working.length ? `${Cap(working.join(' and '))} ${working.length === 1 ? 'is' : 'are'} working.` : 'Between turns.'
+      // After an automatic return the run is working on what closure found.
+      const back = (run.closureReturns ?? []).at(-1)
+      if (back) {
+        return { tone: 'progress', headline: 'Running: returned to the author after closure',
+          detail: `The coordinator found ${back.criteria.map((c) => `${c.id} (${c.unmet})`).join(', ')} not yet met on an approved, checked version, so the engine gave the author another round (return ${run.closureReturns.length} of 2). ${doing}` }
+      }
+      return { tone: 'progress', headline: 'Running', detail: doing }
+    }
+    case 'stopping':
+      return { tone: 'progress', headline: 'Stopping', detail: 'Waiting for the AI tools to confirm they have stopped.' }
+    case 'paused': {
+      const p = run.pause ?? {}
+      if (p.kind === 'manual') return { tone: 'waiting', headline: 'Paused', detail: 'Everything done so far is saved.', next: 'Resume continues from the next unfinished step.' }
+      if (p.request) {
+        // The question is what to answer; the reason is why the run cannot do it.
+        const heading = { 'owner-gate': 'Waiting for you: the issue asked to confirm at this point', authorization: 'Waiting for you: this needs your authorization', 'requirement-conflict': "Waiting for you: the requirements can't all be met" }[p.request.category] ?? 'Waiting for you: work the run may not do itself'
+        return { tone: 'waiting', headline: heading,
+          detail: [p.question, p.request.reason, p.request.recommendation ? `Recommended: ${p.request.recommendation}` : null].filter(Boolean).join('\n\n') || null,
+          next: p.request.projectAction ? `Run the project's "${p.request.projectAction}" action, then answer with what happened.` : 'Do the work, then answer with what happened.' }
+      }
+      return { tone: 'waiting', headline: 'Waiting for your answer', detail: p.question ?? null, next: 'Answer below; the run continues from your answer.' }
+    }
+    case 'cancelled':
+      return run.abandonment
+        ? { tone: 'neutral', headline: 'Abandoned', detail: `An operator abandoned this run. ${kept}`, next: 'Start a new run to continue.' }
+        : { tone: 'neutral', headline: 'Stopped by an operator', detail: `Nothing was delivered. ${kept}`, next: 'Start a new run to continue.' }
+    case 'failed':
+      return { tone: 'error', kept, ...failed(run) }
+    case 'completed': {
+      const done = completed(run, outputs)
+      const known = run.closure?.checks?.baselineKnown ?? []
+      const inherited = run.closure?.checks?.comparison === 'baseline-known' && known.length
+        ? `The checks failed only on ${plural(known.length, 'failure')} the unchanged project has too; ${known.length === 1 ? 'it was' : 'they were'} recorded as baseline-known and did not block.` : ''
+      const detail = [done.detail, inherited, returnWords(run)].filter(Boolean).join(' ')
+      return detail === (done.detail ?? '') ? done : { ...done, detail }
+    }
+    case 'blocked':
+      return blocked(run, outputs, kept)
+    default:
+      return { tone: 'neutral', headline: Cap(String(run.status ?? 'unknown')) }
+  }
+}
+
+/**
+ * A person recorded that they landed the run's work by hand. That claim is
+ * what the run achieved; how the run itself ended is kept beside it, because
+ * the landing changes nothing on the record.
+ */
+function landed (run, before) {
+  const l = run.landed
+  const where = l.commit ? `commit ${l.commit}` : l.checkout
+  return {
+    tone: 'success',
+    headline: `Landed by hand by ${l.by}`,
+    detail: [`${l.by} recorded that ${l.applied} reached ${where}${l.landedAt ? ` on ${l.landedAt}` : ''}.`,
+      l.handChanges ? `Changed by hand beyond the patch: ${l.handChanges}` : null,
+      `The run itself ended as: ${before.headline}.`].filter(Boolean).join(' '),
+    ...(before.kept ? { kept: before.kept } : {}),
+    next: 'Check the result, then record what it means for the issue.'
+  }
+}
+
+function completed (run, outputs) {
+  // A triage decision already has its own words in run-result.
+  const result = runResult(run, outputs)
+  if (result.resultReason === 'triage-disposition') {
+    return { tone: 'success', headline: result.resultLabel, detail: firstLine(result.resultSummary, 600) || null, next: 'Record what it means for the issue, or start the next playbook.' }
+  }
+  if (run.outcome !== 'resolved' && run.ownerInput) {
+    const o = run.ownerInput
+    const n = o.questions?.length ?? 0
+    if (o.answer?.startError) {
+      return { tone: 'warning', headline: "Answered, but the next run didn't start", cause: o.answer.startError,
+        next: 'Your answers are on the issue as a note; start the playbook again from this page.' }
+    }
+    if (o.answer) {
+      return { tone: 'neutral', headline: o.answer.split === 'accept' ? 'Split into new issues' : 'Answered — the work continues in a new run',
+        detail: o.answer.split === 'accept' ? `${plural(o.answer.createdIssues?.length ?? 0, 'issue')} created from the proposed split.` : null }
+    }
+    if (o.verdict === 'too-large') {
+      return { tone: 'waiting', headline: 'Too large for one run: triage proposes a split',
+        detail: o.reason ?? null,
+        next: 'Accept the split to create the parts as new issues, or decline it to run the whole issue anyway. No work was started.' }
+    }
+    return { tone: 'waiting', headline: n === 1 ? 'Waiting for your answer before any work starts' : `Waiting for your ${n} answers before any work starts`,
+      detail: o.reason ?? null,
+      next: 'Answer below; the answers start a fresh run. Nothing was started and no slot is held.' }
+  }
+  if (run.outcome !== 'resolved') {
+    return { tone: 'neutral', headline: 'Triage judged this playbook a poor fit', detail: 'Nothing was changed.', next: 'Start a different playbook, or close the issue.' }
+  }
+  const delivered = run.delivery?.completedAt
+  const action = run.delivery?.action
+  const next = 'Check the result, then record what it means for the issue.'
+  if (run.artifactApplication?.verified) return { tone: 'success', headline: 'Done: the change is in your project', detail: 'The saved patch was applied and verified.', next }
+  if (action === 'worktree-diff' && delivered) return { tone: 'success', headline: 'Done: a patch is ready', detail: 'Your project was not changed. Download or apply the patch below.', next }
+  if (action === 'apply-to-source' && delivered) return { tone: 'success', headline: 'Done: the change is in your project', detail: 'Applied to the project folder and verified; not committed.', next }
+  if (action === 'commit' && delivered) return { tone: 'success', headline: 'Done: the change is committed on a branch', detail: run.integration?.mergeCommit ? 'It has also been merged.' : 'It is not merged yet.', next }
+  if (action === 'in-place' && delivered) return { tone: 'success', headline: 'Done: changed directly in the project', next }
+  const strategy = run.playbook?.strategy
+  if (strategy === 'staging') return { tone: 'success', headline: 'Done: installed and tested on staging', next }
+  if (strategy === 'deployment') return { tone: 'success', headline: 'Done: deployed and verified', next }
+  if (run.reportDisposition) {
+    const n = run.reportDisposition.issues?.length ?? 0
+    const said = firstLine(run.reportDisposition.response, 600)
+    return { tone: 'success', headline: n ? `Done: report with ${plural(n, 'finding')}` : 'Done: report finished', detail: said || null, next }
+  }
+  return { tone: 'success', headline: 'Done', next }
+}
+
+function blocked (run, outputs, kept) {
+  const reason = run.blockedReason
+  const base = { tone: 'warning', kept }
+  switch (reason) {
+    case 'recovery-required':
+    case 'owner-lost':
+      return { ...base, headline: 'Interrupted: the panel restarted while this run was working', cause: run.recovery?.reason ? firstLine(run.recovery.reason) : null,
+        next: 'Recover picks up where it stopped. Abandon keeps the work and lets you start fresh.' }
+    case 'checks-failed-unchanged':
+    case 'rounds-exhausted': {
+      // The reviewers agreed; what stopped the loop was the installed checks on the approved revision.
+      if (checksOnlyBlock(run)) {
+        const check = (run.checkResults ?? []).filter((c) => c.revision === run.revisions?.at(-1)?.fingerprint).at(-1)
+        return { ...base, headline: 'Stopped: the reviewers approved, but the automated checks failed',
+          detail: `${checkFailureWords(check?.baselineComparison?.failures, check?.commands)}${selftestWords(check?.baselineComparison?.selftest)}${reason === 'checks-failed-unchanged' ? 'The author answered the failure with an unchanged candidate, so another round could only repeat it.' : 'The review loop reached its round limit.'}`,
+          next: `Refresh checks reruns them on this candidate (after a flaky or environmental failure is fixed). ${reason === 'checks-failed-unchanged' ? 'Continue gives the author another round with your instruction.' : 'Resume gives the author one more round.'}` }
+      }
+      return { ...base, headline: "Stopped: the author and reviewers didn't agree in time", detail: 'The review loop reached its round limit.',
+        next: 'Resume for one more round, or start a new run with clearer guidance.' }
+    }
+    case 'protocol-repair-exhausted': {
+      const last = (run.steps ?? []).at(-1)
+      return { ...base, headline: `Stopped: ${ROLE(last?.role)} kept answering in the wrong format`, detail: 'Its replies could not be read even after repair attempts.',
+        next: 'Resume for another attempt; if it repeats, use a different model for that seat.' }
+    }
+    case 'budget-exhausted': {
+      const which = spentBudget(run)
+      return { ...base, headline: `Stopped: it used up its ${BUDGET[which] ?? 'allowance'}`, detail: 'Nothing done so far is lost.',
+        next: 'Resume with a larger allowance.' }
+    }
+    case 'closure-not-authorised':
+      return { ...base, headline: 'Finished, but not verified by automated checks', detail: 'Reviewers approved it, but this playbook only finishes on its own when checks have passed.',
+        next: 'Decide yourself: record the outcome, or configure checks and run again.' }
+    case 'task-incomplete':
+      return { ...base, headline: 'Not finished: the agent says the task is not done',
+        detail: firstLine((run.closure?.blockers ?? [])[0]) || null,
+        unmet: (run.closure?.blockers ?? []).map((b) => ({ id: null, text: typeof b === 'string' ? b : (b.description ?? JSON.stringify(b)) })),
+        next: 'Start a new run once the blockers are addressed.' }
+    case 'candidate-changed-since-approval':
+      return { ...base, headline: 'Stopped: the change was edited after it was approved', detail: 'The approval no longer describes what would be delivered.', next: 'Start a new run.' }
+    case 'closure-conditions-unmet': {
+      // An older triage workflow demanded implementation criteria of a
+      // triage; run-result already recognises that record and says so.
+      const result = runResult(run, outputs)
+      if (result.resultReason === 'triage-completion-mismatch') {
+        return { ...base, tone: 'neutral', headline: result.resultLabel, detail: result.resultSummary, next: 'Start an implementation run, or record the outcome yourself.' }
+      }
+      const closed = closureUnmet(run, latestConfirmation(outputs))
+      const why = { ...closed, detail: [closed.detail, returnWords(run), notReturnedWords(run.closure?.notReturned)].filter(Boolean).join(' ') || null }
+      return { ...base, ...why, next: why.unmet?.length ? 'Start a new run that addresses these points, or record the outcome yourself.' : 'Start a new run, or record the outcome yourself.' }
+    }
+    case 'refreshed-checks-failed':
+      return { ...base, headline: 'Stopped: checks failed after the evidence was refreshed', next: 'Start a new run against the current project.' }
+    case 'coordinator-requested-source-refresh':
+      return { ...base, headline: 'Stopped: the coordinator needs a fresh copy of the project', detail: 'The project changed in ways this run cannot account for.', next: 'Start a new run to work against the current project.' }
+    case 'integrity-abandoned':
+      return { ...base, headline: 'Abandoned after an unexpected change to its files', next: 'Start a new run.' }
+    default:
+      break
+  }
+  if (run.integrity?.status === 'quarantined') {
+    return { ...base, tone: 'error', headline: 'On hold: an agent changed files it should not have', cause: firstLine(run.integrity.latest?.reason) || null, next: 'Inspect the changes and decide whether to keep them.' }
+  }
+  if (DELIVERY[reason]) {
+    const d = DELIVERY[reason]
+    // Refused for drift on the patch's own paths: say what reconciling did or can do.
+    const attempt = run.reconciliations?.at(-1)
+    const refused = attempt && attempt.state !== 'accepted' ? ` Reconciling with the project was refused (${attempt.state})${attempt.conflicts?.length ? ` at ${attempt.conflicts.slice(0, 5).join(', ')}` : ''}.` : ''
+    const next = run.delivery?.application?.drifted?.length ? `Reconcile with source to merge it onto the project and recheck it; otherwise: ${d.next.charAt(0).toLowerCase()}${d.next.slice(1)}` : d.next
+    return { ...base, headline: d.headline, detail: (d.detail ?? '') + refused || null, cause: firstLine(run.delivery?.error, 400) || null, next }
+  }
+  if (typeof reason === 'string' && reason.startsWith('release-')) {
+    return { ...base, headline: `Stopped: the release ${reason.slice(8).replace(/-/g, ' ')}`, next: 'Check the release commands in the technical details.' }
+  }
+  return { ...base, headline: 'Stopped and needs a person', detail: reason ? `Reason recorded: ${reason}.` : null }
+}

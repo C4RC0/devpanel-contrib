@@ -1,0 +1,41 @@
+id: feature
+title: Feature
+description: >
+  A new capability from a request or specification, including connecting the project to another service, API or system.
+covers:
+  - feature-implementation
+  - integration-implementation
+guidance:
+  triage: |
+    Establish what the feature is for, not only what it is. Confirm the request is
+    specific enough to implement: inputs, outputs, where it lives, what it must not
+    change. Acceptance criteria must describe observable behaviour a reviewer can
+    check in the diff, one per capability, plus one for how existing behaviour is
+    protected. For an integration, name the external contract (endpoint, protocol,
+    auth) and how failure of the other side is handled.
+  handoff-plan: |
+    Ask for a plan that names the entry points, the data that flows, the failure
+    modes, and the tests or observable checks that would prove each criterion. Ask
+    it to say what it will deliberately leave out.
+  plan: |
+    Cover: where the capability plugs in, what new state or configuration it needs,
+    how errors and the absence of the external side are handled, what is out of
+    scope, and how each acceptance criterion becomes observable. A feature that
+    silently widens permissions or changes existing behaviour is a design flaw.
+  audit-plan: |
+    Weigh completeness against the criteria and the blast radius on existing
+    behaviour. A plan that meets the criteria but changes something it did not need
+    to is not approved.
+  implement: |
+    Build what the approved plan says. New behaviour must be reachable and
+    observable; keep configuration explicit and defaults safe. Do not refactor
+    around the feature — say so in notes if the surrounding code makes it hard.
+  audit-implementation: |
+    Check each criterion against the code, that failure paths exist and are not
+    swallowed, that nothing outside the plan changed, and that any new external
+    dependency is declared. Missing tests for a testable behaviour is a finding; say
+    whether it blocks.
+  confirm: |
+    State, per criterion, where in the diff it is satisfied. Name any behaviour the
+    feature changes that the request did not ask for, and any part of the request
+    deliberately left out, as residual risk.

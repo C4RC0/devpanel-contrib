@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.DS_Store
+.vite/
+
+# The layout pass fetches a browser here; see tools/install-browser.sh
+.browser/
+
+# Rendered from systemd/devpanel.service.in by install.sh
+systemd/devpanel.service

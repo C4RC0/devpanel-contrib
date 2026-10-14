@@ -1,0 +1,35 @@
+id: bugfix
+title: Bug fix
+description: >
+  Correcting behaviour that does not work as intended. An architectural fix is this intent with the plan rejected if it is a workaround rather than a root-cause repair.
+covers:
+  - bugfix
+  - architectural-fix
+guidance:
+  triage: |
+    Reproduce or locate the defect before anything else: the failing behaviour, the
+    input or state that triggers it, and where in the code it originates. If it
+    cannot be located, say so — a fix for an unlocated bug is a guess. Criteria:
+    the wrong behaviour no longer occurs, the intended behaviour does, and the fix
+    is at the cause rather than at the symptom.
+  handoff-plan: |
+    Ask for the root cause in one paragraph before any proposed change, then the
+    smallest change that removes the cause, then how a regression would be caught.
+  plan: |
+    Name the root cause and show the evidence for it. Propose the smallest change
+    at that cause. If the honest fix is larger than the report suggests, say so
+    rather than patching the symptom. Say how the regression would be detected.
+  audit-plan: |
+    Reject a workaround that leaves the cause in place unless the plan argues why
+    the cause cannot be fixed here. Check the proposed change cannot reintroduce the
+    bug through another path.
+  implement: |
+    Fix the cause. Add or adjust the test that would have caught this, where tests
+    exist. Do not clean up unrelated code in the same change.
+  audit-implementation: |
+    Confirm the cause is removed, not masked; that the fix does not change
+    behaviour beyond the defect; and that a regression check exists or its absence
+    is explained.
+  confirm: |
+    Record the root cause and the evidence it is fixed. If the fix is at a symptom
+    by necessity, record the remaining cause as residual risk.

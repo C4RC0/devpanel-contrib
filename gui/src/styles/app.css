@@ -1,0 +1,59 @@
+/*
+ * Global tweaks only. Everything else is component-scoped or comes from the
+ * Vuetify theme in src/plugins/vuetify.js.
+ */
+
+html {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/*
+ * Painted here as well as by Vuetify's own root element. A transparent body
+ * shows the browser's default behind overscroll and behind anything the app
+ * does not cover, which reads as a flash of the wrong theme.
+ */
+html, body {
+  background: rgb(var(--v-theme-background));
+  color: rgb(var(--v-theme-on-background));
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3 {
+  font-weight: 650;
+}
+
+/* Keep keyboard focus obvious against both surfaces. */
+:focus-visible {
+  outline: 2px solid rgb(var(--v-theme-primary));
+  outline-offset: 2px;
+}
+
+/*
+ * A finger needs a bigger target than a mouse: 44px on a coarse pointer, and
+ * nothing changes for a mouse. A link inside running text keeps its size, since
+ * min-height does not apply to an inline box. Vuetify's own sizes live in
+ * cascade layers, which these unlayered rules override.
+ */
+@media (pointer: coarse) {
+  button, [role="button"], [role="tab"], select, summary, a[href], .v-btn,
+  input:not([type="hidden"], [type="checkbox"], [type="radio"]):not(.v-field *) {
+    min-height: 44px;
+  }
+  button, [role="button"], a[href], .v-btn { min-width: 44px; }
+  .v-input--density-compact, .v-input--density-compact .v-field { --v-input-control-height: 44px; }
+  .v-tabs--density-compact:not(.v-tabs--stacked) { --v-tabs-height: 44px; }
+  .v-selection-control { --v-selection-control-size: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

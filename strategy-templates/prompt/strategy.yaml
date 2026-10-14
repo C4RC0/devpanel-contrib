@@ -1,0 +1,68 @@
+id: prompt
+version: 1
+title: Single seat
+description: >
+  One seat, one model, no coordination. For simple tasks that do not need a
+  multi-agent workflow: the worker receives the issue and every captured input
+  file, does the work in the isolated candidate, and reports. The candidate is
+  fingerprinted and delivered like any other; nobody reviews it, and closure
+  records that plainly.
+roles:
+  worker:
+    description: The only seat. Reads the task and every input, does the work, reports what it did and did not do.
+    writesCode: true
+    invokesOthers: false
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+  base: working-tree
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity:
+          - critical
+          - major
+  protocolRepair:
+    maxAttempts: 1
+    onExhausted: block
+checks:
+  requirement: optional
+  boundToRevision: true
+budgets:
+  maxSteps: 4
+  wallClockMinutes: 120
+  onExhausted: unresolved
+phases:
+  - id: execute
+    step:
+      id: execute
+      role: worker
+      prompt: execute.md
+      output: singleSeatResult
+      context:
+        - issue
+        - project
+        - window
+        - decisions
+      recordsRevision: true
+completion:
+  requires:
+    - checksSatisfied
+    - noOutstandingBlockingFindings
+    - workerCompletion
+    - deliveryCompleted
+  autoClose:
+    minimumVerification: review-only
+  delivery:
+    action: worktree-diff
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved
+tactic: prompt

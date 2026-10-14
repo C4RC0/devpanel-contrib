@@ -1,0 +1,209 @@
+id: author-auditor-pingpong
+version: 1
+title: Coordinated author/auditor ping-pong
+description: >
+  A coordinator triages the issue and authors every handoff prompt; an author
+  produces the plan and the implementation; an auditor reviews both. The engine
+  owns invocation, session ownership, ordering, budgets and cancellation — the
+  coordinator influences the others only through the prompts it writes.
+
+roles:
+  coordinator:
+    description: Coordinates from supplied task, reports and engine evidence only; delegates technical work.
+    invokesOthers: false
+  author:
+    description: Produces the plan, the implementation, and each correction.
+    writesCode: true
+    invokesOthers: false
+  auditor:
+    description: Reviews the plan and the implementation; never edits.
+    invokesOthers: false
+
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity: [critical, major]
+  protocolRepair:
+    maxAttempts: 2
+    onExhausted: block
+
+checks:
+  # Policy only. Whether checks can actually run is a runtime outcome recorded
+  # in run.json, and it never feeds back into this requirement.
+  requirement: optional
+  boundToRevision: true
+
+budgets:
+  maxSteps: 48
+  wallClockMinutes: 240
+  onExhausted: unresolved
+
+phases:
+  - id: triage
+    title: Verify the issue and the fit
+    step:
+      id: triage
+      role: coordinator
+      prompt: triage.md
+      context: [issue, project, playbook]
+      output: triageResult
+    transitions:
+      - when: "output.fit == false"
+        to: abort
+        outcome: unresolved
+      # A decision only the operator can make stops the run here, once. The
+      # answer is recorded as a step and delivered to every later coordinator
+      # turn as `decisions`.
+      # One run either finishes on its own or does not start: a question for
+      # the owner ends the run after triage (the slot and worktree are freed)
+      # and the answer starts a fresh one.
+      - when: output.autonomy.verdict == needs-owner-input
+        to: ask-owner
+      - when: output.autonomy.verdict == too-large
+        to: ask-owner
+      - when: output.suggestion.action == needs-input
+        to: ask-owner
+
+  - id: handoff-plan
+    title: Coordinator briefs the author
+    step:
+      id: handoff-plan
+      role: coordinator
+      prompt: handoff-plan.md
+      context: [issue, project, steps.triage.response, steps.triage.output.acceptanceCriteria, decisions]
+      output: handoff
+
+  - id: plan
+    title: Author drafts an implementation plan
+    step:
+      id: plan
+      role: author
+      promptFrom: steps.handoff-plan.output.prompt
+      context: [issue, project, steps.triage.output.acceptanceCriteria]
+      output: authorArtifact
+
+  - id: handoff-plan-review
+    title: Coordinator briefs the auditor on the plan
+    step:
+      id: handoff-plan-review
+      role: coordinator
+      prompt: handoff-review.md
+      context: [issue, plan.current, acceptanceCriteria]
+      output: handoff
+
+  - id: plan-review
+    title: Plan ping-pong
+    loop:
+      maxRounds: 3
+      until: "review.verdict == approved && !review.substantial"
+      onExhausted: unresolved
+      steps:
+        - id: audit-plan
+          role: auditor
+          # The strategy owns the auditor's instructions; the coordinator's brief
+          # is delivered as context, never as the whole prompt.
+          prompt: audit-plan.md
+          # plan.current, not steps.plan.response: after a revision the first
+          # draft is the wrong document to review.
+          context: [issue, plan.current, acceptanceCriteria, findings.outstanding, steps.handoff-plan-review.output.prompt]
+          output: reviewResult
+        - id: revise-plan
+          role: author
+          when: "review.substantial"
+          prompt: revise.md
+          context: [issue, plan.current, findings.outstanding]
+          output: authorArtifact
+
+  - id: handoff-implement
+    title: Coordinator releases the approved plan for implementation
+    step:
+      id: handoff-implement
+      role: coordinator
+      prompt: handoff-implement.md
+      context: [issue, project, plan.approved, acceptanceCriteria, findings.plan, decisions]
+      output: handoff
+
+  - id: implement
+    title: Author implements
+    step:
+      id: implement
+      role: author
+      promptFrom: steps.handoff-implement.output.prompt
+      # plan.approved: the document the audit approved, not the first draft.
+      context: [issue, project, plan.approved, acceptanceCriteria, findings.plan]
+      output: authorArtifact
+      recordsRevision: true
+
+  - id: handoff-implementation-review
+    title: Coordinator briefs the auditor on the implementation
+    step:
+      id: handoff-implementation-review
+      role: coordinator
+      prompt: handoff-review.md
+      context: [issue, plan.approved, steps.implement.response, acceptanceCriteria, revision.current, findings.plan]
+      output: handoff
+
+  - id: implementation-review
+    title: Implementation ping-pong
+    loop:
+      maxRounds: 5
+      until: "review.verdict == approved && !review.substantial"
+      onExhausted: unresolved
+      steps:
+        - id: audit-implementation
+          role: auditor
+          prompt: audit-implementation.md
+          # findings.plan: what the plan review demanded. The auditor must give
+          # each a disposition; a deferred one stays open and blocks approval.
+          # revision.diff: the candidate itself as a patch, not the author's
+          # account of it.
+          context: [issue, plan.approved, steps.implement.response, revision.diff, acceptanceCriteria, revision.current, checks.latest, findings.outstanding, findings.plan, steps.handoff-implementation-review.output.prompt]
+          output: reviewResult
+        - id: fix
+          role: author
+          when: "review.substantial"
+          prompt: revise.md
+          context: [issue, plan.approved, acceptanceCriteria, revision.current, findings.outstanding]
+          output: authorArtifact
+          recordsRevision: true
+
+  - id: confirm
+    title: Coordinator writes the closing report
+    step:
+      id: confirm
+      role: coordinator
+      prompt: confirm.md
+      context: [issue, project, acceptanceCriteria, revision.current, checks.latest, steps.implement.response, steps.audit-implementation.response, findings.plan, findings.outstanding, decisions]
+      output: closureConfirmation
+    transitions:
+      - when: "output.satisfied == false"
+        to: abort
+        outcome: unresolved
+
+completion:
+  requires:
+    - sameRevisionApproval
+    - checksSatisfied
+    - noOutstandingBlockingFindings
+    - coordinatorConfirmation
+    - deliveryCompleted
+  autoClose:
+    # Evidence and authority are separate. review-only honestly describes what is
+    # known when nothing could be run; it does not authorise closing on its own.
+    minimumVerification: verified
+  delivery:
+    action: worktree-diff
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved

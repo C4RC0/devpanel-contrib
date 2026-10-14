@@ -1,0 +1,24 @@
+id: breakdown
+title: Breakdown into steps
+description: >
+  Breaking an agreed change into concrete, ordered implementation steps, each reviewable on its own.
+covers:
+  - divide-and-refine
+guidance:
+  triage: |
+    Confirm the change is agreed and bounded. Criteria: steps are ordered so each
+    leaves the project working; each step names its files, its acceptance check
+    and its risk; the whole set covers the change with nothing left implicit.
+  handoff-draft: |
+    Ask for numbered steps with scope, files, check and dependencies on earlier
+    steps.
+  draft: |
+    Produce the steps. Each: what changes, where, how to check it, what it depends
+    on, what could go wrong. Keep steps small enough to review in one sitting. Say
+    which could be one issue each.
+  audit-draft: |
+    Check ordering (nothing depends on a later step), completeness (the steps
+    sum to the change), and that each step is genuinely checkable.
+  confirm: |
+    Confirm the steps cover the agreed change; gaps or assumptions are residual
+    risk.

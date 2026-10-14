@@ -1,0 +1,34 @@
+id: refactor
+title: Refactor
+description: >
+  Improving code structure, naming or organisation without changing externally observable behaviour. Includes cleanup, simplification and adapting code to a different API or convention.
+covers:
+  - refactoring
+  - code-cleanup
+  - code-migration
+guidance:
+  triage: |
+    Define the observable behaviour that must not change, concretely enough that a
+    reviewer can check it. Criteria: the structural goal is reached, and behaviour
+    is unchanged — name the interfaces, outputs and side effects that prove it.
+  handoff-plan: |
+    Ask for the mechanical steps in order, each one behaviour-preserving on its own,
+    and for what evidence of unchanged behaviour will be available.
+  plan: |
+    List the transformations in an order where every intermediate state still
+    works. Name every public interface touched and why it is preserved. A refactor
+    that "also fixes" something is two changes; separate them or flag the fix.
+  audit-plan: |
+    Look for hidden behaviour changes: altered error handling, ordering,
+    defaults, visibility. A step that cannot be shown behaviour-preserving is a
+    finding.
+  implement: |
+    Change structure, not behaviour. If a behaviour change turns out to be
+    necessary, stop and say so in notes rather than folding it in.
+  audit-implementation: |
+    Diff the behaviour, not the style: every changed call site, every changed
+    signature, every removed branch. Confirm tests still exercise the moved code.
+    Naming and style are non-blocking unless they mislead.
+  confirm: |
+    State what evidence shows behaviour unchanged. Any behaviour change that crept
+    in is residual risk, not a footnote.

@@ -1,0 +1,29 @@
+id: prototype
+title: Prototype
+description: >
+  A limited experiment or proof of concept to validate an idea. The report is the deliverable; the code is disposable.
+covers:
+  - prototyping
+guidance:
+  triage: |
+    State the question the prototype must answer and what result would settle it
+    either way. Criteria: the question is answered with evidence, and the report
+    says what the prototype does not show.
+  handoff-plan: |
+    Ask for the minimum that answers the question, what will be faked or
+    stubbed, and how the result will be read.
+  plan: |
+    Build the least that answers the question. Say what is stubbed. Say what a
+    production version would need that this omits.
+  audit-plan: |
+    Check the experiment actually tests the question and that a positive result
+    could not come from the stubs.
+  implement: |
+    Keep it small and legible. Record what was observed in the response, with the
+    commands or steps used.
+  audit-implementation: |
+    Judge the conclusion, not the code quality: does the evidence support it, and
+    are the limits stated. Code style is not a finding here.
+  confirm: |
+    Record the answer, the evidence, and every limit of the experiment as residual
+    risk. Do not describe the candidate as mergeable.

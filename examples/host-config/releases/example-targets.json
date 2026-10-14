@@ -1,0 +1,30 @@
+{
+  "staging": {
+    "host": "root@staging.example.invalid",
+    "project": "/opt/staging.example.invalid",
+    "stateRoot": "/var/lib/devpanel-releases",
+    "service": "project.service",
+    "serviceUser": "<service-user>",
+    "companions": [],
+    "node": "/usr/bin/node",
+    "nodeMajor": "22",
+    "observeSeconds": 180,
+    "readinessSeconds": 300,
+    "builderSeconds": 300,
+    "fullTests": true
+  },
+  "production": {
+    "host": "root@production.example.invalid",
+    "project": "/opt/production.example.invalid",
+    "stateRoot": "/var/lib/devpanel-releases",
+    "service": "project.service",
+    "serviceUser": "<service-user>",
+    "companions": [],
+    "node": "/usr/bin/node",
+    "nodeMajor": "22",
+    "observeSeconds": 180,
+    "readinessSeconds": 300,
+    "builderSeconds": 300,
+    "fullTests": false
+  }
+}

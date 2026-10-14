@@ -1,0 +1,30 @@
+id: performance
+title: Performance
+description: >
+  Improving execution speed, responsiveness, memory use or resource efficiency.
+covers:
+  - performance-optimization
+guidance:
+  triage: |
+    Identify the measured or clearly reasoned bottleneck. Criteria must name the
+    metric and the direction; a number only if one is available. Behaviour must
+    be unchanged, stated as a criterion.
+  handoff-plan: |
+    Ask for the cause of the cost, the proposed change, the expected effect, how it
+    would be measured, and the behaviour that must be preserved.
+  plan: |
+    Explain why the code is slow or heavy before proposing what to change. Prefer
+    algorithmic and I/O changes to micro-optimisation. State the trade-off
+    (memory, complexity, caching staleness). Say how the gain would be measured.
+  audit-plan: |
+    Check the reasoning about the cost holds, that correctness is preserved under
+    the change (ordering, caching, concurrency), and that the trade-off is named.
+  implement: |
+    Make the change and keep it legible. If measurement is possible, record the
+    before and after in the response; if not, say so.
+  audit-implementation: |
+    Look for correctness regressions typical of optimisation: stale caches, lost
+    ordering, races, unbounded growth. Unmeasured claims are not evidence.
+  confirm: |
+    Record what was measured and what was not. An unmeasured improvement is
+    residual risk: the change may not help.

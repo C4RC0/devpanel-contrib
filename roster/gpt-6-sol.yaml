@@ -1,0 +1,20 @@
+id: gpt-6-sol
+title: GPT-6 Sol
+harness: codex
+model: gpt-6-sol
+efforts: [ low, medium, high, xhigh, max ]
+defaultEffort: ~
+contextWindow: ~
+verification:
+  status: verified
+  verifiedAt: ~
+  method: "Live fresh and resumed turns through the Codex adapter, no effort
+    override; model access ok, discovered session resumed and recalled the
+    first turn. This verifies connectivity and continuity, not supervisor
+    decision quality."
+notes: >-
+  Access and session continuity are verified through the default Codex
+  connection at the runtime default effort. Listed effort levels are taken from
+  the Codex model cache (which advertises low, medium, high, xhigh, max, ultra; `ultra` is outside
+  the roster schema) and were not exercised live. Context window remains
+  unverified. Supervisor suitability requires separate evaluation.

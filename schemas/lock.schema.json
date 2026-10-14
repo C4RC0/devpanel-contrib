@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/lock.schema.json",
+  "title": "Lock",
+  "description": "Atomic lock with owner identity. Used for the run lock and, separately, for step-number allocation — which EVERY step-creating path must take, including manual creation through the API. Retry-on-EEXIST is not sufficient there: two concurrent creates with different slugs both succeed and both take the same number.",
+  "type": "object",
+  "required": ["purpose", "owner", "acquiredAt"],
+  "additionalProperties": false,
+  "properties": {
+    "purpose": { "enum": ["run", "step-allocation"] },
+    "owner": {
+      "type": "object",
+      "required": ["pid", "bootId", "processStartedAt", "host"],
+      "additionalProperties": false,
+      "description": "Enough to establish liveness positively. Lock age alone is NOT sufficient evidence that a previous owner is gone — a long invocation is indistinguishable from a dead one by age.",
+      "properties": {
+        "pid": { "type": "integer" },
+        "bootId": { "type": "string", "description": "Guards against pid reuse across a reboot." },
+        "processStartedAt": { "type": "string", "description": "Guards against pid reuse within a boot: the pid must exist AND have this start time." },
+        "host": { "type": "string" },
+        "runId": { "type": ["string", "null"] }
+      }
+    },
+    "acquiredAt": { "type": "string", "format": "date-time" },
+    "heartbeatAt": { "type": ["string", "null"], "format": "date-time", "description": "Advisory only; staleness is a hint to check liveness, never grounds to break the lock on its own." }
+  }
+}

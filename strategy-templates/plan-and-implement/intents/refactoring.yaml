@@ -1,0 +1,58 @@
+id: refactoring
+title: Refactoring
+description: Simplify structure and remove unnecessary code while preserving observable functionality and compatibility.
+covers:
+  - refactoring
+  - simplification
+  - code-cleanup
+guidance:
+  triage: |
+    Set the structural objective from the human request and require preserved functionality,
+    compatibility and operational behavior. Delegate the inventory of behavior and technical
+    redesign to the planner. Fewer lines alone is not an acceptance criterion.
+  brief-plan: |
+    Ask the planner for the smallest coherent redesign and evidence that behavior is preserved.
+    Do not design the architecture yourself or expand the requested scope.
+  plan: |
+    Inspect the scoped code and its actual callers. Identify observable contracts: public APIs,
+    inputs/outputs, defaults, errors, side effects, ordering, persistence formats and relevant
+    security and performance properties. Record the baseline and the focused checks that can
+    compare old and new behavior; add characterization tests only for material untested behavior.
+    Propose a concise redesign that removes duplication, unnecessary branches and indirection,
+    clarifies responsibilities and naming, and improves readability and robustness. Explain why
+    the result is simpler. Delete code only with evidence it is unused, including dynamic/configured
+    entry points. Do not replace clear code with dense expressions, speculative abstractions or
+    a new framework simply to reduce line count. Keep the plan proportional to the requested scope.
+    No features, bug fixes, dependencies or compatibility changes without explicit scope. If a
+    behavior change seems necessary, identify it separately for a decision before implementing it.
+  brief-implement: |
+    Route the approved redesign and outstanding audit findings to the planner. Keep the behavioral
+    contract intact and do not add cosmetic churn or unrelated improvements.
+  implement: |
+    Implement the approved refactoring in small, behavior-preserving steps. Consolidate duplicated
+    logic, remove proven dead code and simplify interfaces/control flow while retaining all required
+    functionality and compatibility. Keep public names/formats stable unless a compatible internal
+    adaptation is part of the plan. Reduce code where it improves clarity; do not code-golf.
+    Compare the targeted before/after checks and run relevant existing regressions. Do not weaken
+    tests, drop assertions or alter expected behavior merely to make the rewrite pass. Report the
+    concrete simplification, preserved contracts and check evidence, including anything not verified.
+  audit-plan-1: &audit |
+    Independently assess behavior preservation and whether the proposed/resulting structure is
+    actually simpler, readable and robust. Inspect the relevant source/callers and exact artifact;
+    check removed paths, dynamic entry points, defaults, error handling, side effects, ordering,
+    persisted data and security/performance assumptions. Require evidence for removed functionality
+    being unnecessary. Compare meaningful before/after checks and ensure tests were not weakened.
+    Fewer lines is supporting evidence, not proof of improvement. Block functional regressions,
+    unsupported deletions and unjustified compatibility changes. Stylistic preferences alone should
+    not trigger another round. Cite a concrete criterion, location and consequence for each finding.
+  audit-plan-2: *audit
+  audit-plan-3: *audit
+  audit-plan-4: *audit
+  audit-implement-1: *audit
+  audit-implement-2: *audit
+  audit-implement-3: *audit
+  audit-implement-4: *audit
+  confirm: |
+    Reconcile the planner/auditor evidence for simpler structure and preserved functionality at the
+    exact revision. State evidence limitations without pretending unrun checks passed. Do not repeat
+    their inspection or infer correctness from reduced line count.

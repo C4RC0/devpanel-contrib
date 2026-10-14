@@ -1,0 +1,32 @@
+id: docs
+title: Documentation
+description: >
+  Creating documentation for a feature, system, API or process, or bringing existing documentation into line with current behaviour.
+covers:
+  - documentation-writing
+  - documentation-updating
+  - changelog-writing
+guidance:
+  triage: |
+    Identify what is undocumented or wrong by comparing the documentation with the
+    code. Criteria: each named topic is documented accurately, with the source in
+    the code it was checked against.
+  handoff-plan: |
+    Ask for the topics, the audience, and the code each statement will be checked
+    against.
+  plan: |
+    List the sections and, for each, the code that is the source of truth. Prefer
+    correcting to adding. Flag anything the code does that the documentation should
+    not promise.
+  audit-plan: |
+    Check the plan documents behaviour, not intentions, and does not promise what
+    the code does not do.
+  implement: |
+    Write from the code. Every statement of behaviour must be checkable there. Keep
+    the existing voice and structure of the documentation.
+  audit-implementation: |
+    Verify statements against the code; an inaccurate sentence is a finding.
+    Style is non-blocking.
+  confirm: |
+    State which sections were verified against code and which describe intended
+    behaviour not yet implemented.

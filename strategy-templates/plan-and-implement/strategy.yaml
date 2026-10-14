@@ -1,0 +1,350 @@
+id: plan-and-implement
+version: 1
+title: plan-and-implement
+description: Coordinated plan-and-implement with configurable occupied seats and
+  durable evidence.
+roles:
+  coordinator:
+    description: Coordinates from supplied task, reports and engine evidence only; delegates technical work.
+    invokesOthers: false
+  planner:
+    description: Sole source writer; plans and implements directed corrections.
+    writesCode: true
+    invokesOthers: false
+  auditor-1:
+    description: Independently audits the exact current plan or candidate.
+    optional: true
+    invokesOthers: false
+  auditor-2:
+    description: Independently audits the exact current plan or candidate.
+    optional: true
+    invokesOthers: false
+  auditor-3:
+    description: Independently audits the exact current plan or candidate.
+    optional: true
+    invokesOthers: false
+  auditor-4:
+    description: Independently audits the exact current plan or candidate.
+    optional: true
+    invokesOthers: false
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+  base: working-tree
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity:
+          - critical
+          - major
+  protocolRepair:
+    maxAttempts: 2
+    onExhausted: block
+checks:
+  requirement: optional
+  boundToRevision: true
+budgets:
+  maxSteps: 160
+  wallClockMinutes: 480
+  onExhausted: unresolved
+phases:
+  - id: triage
+    step:
+      id: triage
+      role: coordinator
+      prompt: orient.md
+      output: triageResult
+      # Phase 1: triage reads the run's source snapshot (read-only, inside the
+      # seat fence) to establish facts the criteria depend on; tool-free when
+      # the fence cannot be proved.
+      access: read
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+    transitions:
+      - when: output.fit == false
+        to: abort
+        outcome: unresolved
+      # One run either finishes on its own or does not start: a question for
+      # the owner ends the run after triage (the slot and worktree are freed)
+      # and the answer starts a fresh one.
+      - when: output.autonomy.verdict == needs-owner-input
+        to: ask-owner
+      - when: output.autonomy.verdict == too-large
+        to: ask-owner
+      - when: output.suggestion.action == needs-input
+        to: ask-owner
+  - id: plan-review
+    loop:
+      maxRounds: 5
+      consensus: true
+      until: review.verdict == approved && !review.substantial
+      # Nobody is asked when the rounds run out: a loop whose last round left
+      # fewer substantial findings than the one before gets one more round,
+      # otherwise the run ends unresolved with drafts and findings preserved.
+      onExhausted: extend-if-converging
+      steps:
+        - id: brief-plan
+          role: coordinator
+          prompt: brief.md
+          output: handoff
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - checks.latest
+        - id: plan
+          role: planner
+          prompt: plan.md
+          output: authorArtifact
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - steps.brief-plan.output.prompt
+            - plan.current
+            - plan.approved
+            - revision.current
+            - checks.latest
+        - id: audit-plan-1
+          role: auditor-1
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+        - id: audit-plan-2
+          role: auditor-2
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+        - id: audit-plan-3
+          role: auditor-3
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+        - id: audit-plan-4
+          role: auditor-4
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+  - id: implement-review
+    loop:
+      maxRounds: 5
+      consensus: true
+      until: review.verdict == approved && !review.substantial
+      # As in plan review: a converging loop gets one more round without
+      # asking; one that is not converging ends unresolved, the candidate,
+      # findings and checks preserved.
+      onExhausted: extend-if-converging
+      steps:
+        - id: brief-implement
+          role: coordinator
+          prompt: brief.md
+          output: handoff
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - checks.latest
+        - id: implement
+          role: planner
+          prompt: implement.md
+          output: authorArtifact
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - steps.brief-implement.output.prompt
+            - plan.current
+            - plan.approved
+            - revision.current
+            - checks.latest
+          recordsRevision: true
+        - id: audit-implement-1
+          role: auditor-1
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+            - findings.plan
+        - id: audit-implement-2
+          role: auditor-2
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+            - findings.plan
+        - id: audit-implement-3
+          role: auditor-3
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+            - findings.plan
+        - id: audit-implement-4
+          role: auditor-4
+          prompt: audit.md
+          output: reviewResult
+          context:
+            - issue
+            - project
+            - acceptanceCriteria
+            - window
+            - reports
+            - findings.outstanding
+            - decisions
+            - plan.current
+            - plan.approved
+            - revision.current
+            - revision.diff
+            - checks.latest
+            - findings.plan
+  - id: confirm
+    step:
+      id: confirm
+      role: coordinator
+      prompt: confirm.md
+      output: closureConfirmation
+      # Reads the run's own check logs (not the source) inside a proved seat
+      # fence; tool-free otherwise, with the check evidence quoted in the prompt.
+      access: checks
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - revision.current
+        - checks.latest
+        - plan.approved
+completion:
+  requires:
+    - sameRevisionApproval
+    - checksSatisfied
+    - noOutstandingBlockingFindings
+    - coordinatorConfirmation
+    - deliveryCompleted
+  autoClose:
+    minimumVerification: review-only
+  delivery:
+    action: worktree-diff
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved
+tactic: plan-and-implement

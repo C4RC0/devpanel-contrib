@@ -1,0 +1,19 @@
+id: deployment
+version: 2
+title: Deployment
+description: Coordinated deployment with configurable occupied seats and durable evidence.
+strategy: deployment
+strategyVersion: 1
+participants:
+  coordinator:
+    model: opus-5-5
+    effort: medium
+  release-operator:
+    model: opus-5-5
+    effort: xhigh
+autoClose:
+  minimumVerification: review-only
+  justification: Closure requires promotion of the selected staged artifact and accepted production assessments. Every occupied verifier must finish; configured rollback policy governs recovery.
+budgets:
+  maxSteps: 120
+  wallClockMinutes: 240

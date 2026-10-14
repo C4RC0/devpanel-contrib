@@ -1,0 +1,149 @@
+id: analysis
+version: 1
+title: Coordinated document with independent review
+description: >
+  For work whose deliverable is a document rather than a change: the coordinator
+  triages the issue and briefs the author; the author drafts; the auditor
+  reviews the draft against the issue; the coordinator confirms it answers what
+  was asked. No candidate is fingerprinted and nothing leaves the run — the
+  step responses are the deliverable.
+
+roles:
+  coordinator:
+    description: Coordinates from supplied task, reports and engine evidence only; delegates technical work.
+    invokesOthers: false
+  author:
+    description: Writes the document and each revision. Reads the project; never edits it.
+    writesCode: false
+    invokesOthers: false
+  auditor:
+    description: Reviews the document against the issue and the criteria; never edits.
+    invokesOthers: false
+
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity: [critical, major]
+  protocolRepair:
+    maxAttempts: 2
+    onExhausted: block
+
+checks:
+  requirement: none
+  boundToRevision: true
+
+budgets:
+  maxSteps: 24
+  wallClockMinutes: 180
+  onExhausted: unresolved
+
+phases:
+  - id: triage
+    title: Verify the issue and the fit
+    step:
+      id: triage
+      role: coordinator
+      prompt: triage.md
+      context: [issue, project, playbook]
+      output: triageResult
+    transitions:
+      - when: "output.fit == false"
+        to: abort
+        outcome: unresolved
+      # One run either finishes on its own or does not start: a question for
+      # the owner ends the run after triage (the slot and worktree are freed)
+      # and the answer starts a fresh one.
+      - when: output.autonomy.verdict == needs-owner-input
+        to: ask-owner
+      - when: output.autonomy.verdict == too-large
+        to: ask-owner
+      - when: output.suggestion.action == needs-input
+        to: ask-owner
+
+  - id: handoff-draft
+    title: Coordinator briefs the author
+    step:
+      id: handoff-draft
+      role: coordinator
+      prompt: handoff-draft.md
+      context: [issue, project, steps.triage.response, steps.triage.output.acceptanceCriteria, decisions]
+      output: handoff
+
+  - id: draft
+    title: Author writes the document
+    step:
+      id: draft
+      role: author
+      promptFrom: steps.handoff-draft.output.prompt
+      context: [issue, project, steps.triage.output.acceptanceCriteria]
+      output: documentArtifact
+
+  - id: handoff-draft-review
+    title: Coordinator briefs the auditor
+    step:
+      id: handoff-draft-review
+      role: coordinator
+      prompt: handoff-review.md
+      context: [issue, plan.current, acceptanceCriteria]
+      output: handoff
+
+  - id: draft-review
+    title: Document ping-pong
+    loop:
+      maxRounds: 3
+      until: "review.verdict == approved && !review.substantial"
+      onExhausted: unresolved
+      steps:
+        - id: audit-draft
+          role: auditor
+          # The strategy owns the auditor's instructions; the coordinator's brief
+          # is delivered as context, never as the whole prompt.
+          prompt: audit-draft.md
+          # plan.current is the latest draft, revisions included.
+          context: [issue, plan.current, acceptanceCriteria, findings.outstanding, steps.handoff-draft-review.output.prompt]
+          output: reviewResult
+        - id: revise-draft
+          role: author
+          when: "review.substantial"
+          prompt: revise.md
+          context: [issue, plan.current, acceptanceCriteria, findings.outstanding]
+          output: documentArtifact
+
+  - id: confirm
+    title: Coordinator confirms the document answers the issue
+    step:
+      id: confirm
+      role: coordinator
+      prompt: confirm.md
+      context: [issue, project, acceptanceCriteria, plan.approved, steps.audit-draft.response, findings.outstanding, decisions]
+      output: closureConfirmation
+    transitions:
+      - when: "output.satisfied == false"
+        to: abort
+        outcome: unresolved
+
+completion:
+  requires:
+    - noOutstandingBlockingFindings
+    - coordinatorConfirmation
+    - deliveryCompleted
+  autoClose:
+    # A document has no check to pass; agreement plus confirmation is all the
+    # evidence there is, and closure records review-only honestly.
+    minimumVerification: review-only
+  delivery:
+    action: none
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved

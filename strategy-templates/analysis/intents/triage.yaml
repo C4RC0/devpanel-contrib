@@ -1,0 +1,24 @@
+id: triage
+title: Triage
+description: >
+  Classifying a report, checking for duplicates, assessing impact and recommending a priority, without fixing anything.
+covers:
+  - triage
+guidance:
+  triage: |
+    This intent produces a triage document about the report, not a fix. Criteria:
+    the report is classified (bug, request, question, invalid); duplicates or
+    related issues are named; impact and likely cause are assessed with
+    evidence; a priority and next step are recommended.
+  handoff-draft: |
+    Ask for classification, evidence from the code, related issues, impact, and a
+    recommended next step.
+  draft: |
+    Classify, locate the likely cause in the code if it is a defect, assess impact
+    and who is affected, name related issues in the issue tree, recommend a
+    priority and the playbook or intent a fix would use. Do not fix.
+  audit-draft: |
+    Check the classification and cause against the code; a triage that guesses
+    is a finding.
+  confirm: |
+    Confirm the recommendation is supported; unknowns are residual risk.

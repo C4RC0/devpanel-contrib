@@ -1,0 +1,51 @@
+# devpanel, as a service.
+#
+# Rendered from this template by install.sh — @PLACEHOLDERS@ are filled in with
+# the paths and user that actually apply on the machine, so this file is the
+# thing to read and the installed copy is the thing to run.
+#
+# The panel does NOT run as root. It runs as the user that owns the project, and
+# reaches port 443 through a file capability rather than through privilege.
+
+[Unit]
+Description=devpanel — development control panel
+Documentation=file://@DIR@/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@DIR@
+ExecStart=@NODE@ server/index.js
+Environment=NODE_ENV=production
+
+Restart=on-failure
+RestartSec=3
+
+# Shutdown is not instant, on purpose. SIGTERM runs the supervisor's shutdown:
+# stop every run it is driving, wait for the runtimes to confirm termination,
+# then exit. TimeoutStopSec must stay comfortably above the grace period below,
+# or systemd sends SIGKILL part-way through and the runs come back needing
+# recovery — the exact state the shutdown path exists to avoid.
+Environment=DEVPANEL_SHUTDOWN_GRACE_MS=20000
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+# SIGTERM reaches the panel alone so its own shutdown can run; whatever is still
+# in the cgroup when it exits is then killed, so no agent process is orphaned.
+KillMode=mixed
+
+# Deliberately NOT NoNewPrivileges=yes. Port 443 is reached through
+# cap_net_bind_service on @NODE@, and NoNewPrivileges blocks precisely that kind
+# of capability. The alternative — AmbientCapabilities — would hand the
+# capability to every agent process the panel spawns, which is worse. Nothing
+# here gains root either way.
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=devpanel
+
+[Install]
+WantedBy=multi-user.target

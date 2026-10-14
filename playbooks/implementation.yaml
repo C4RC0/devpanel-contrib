@@ -1,0 +1,25 @@
+id: implementation
+version: 3
+title: Implementation
+description: Coordinated implementation with configurable occupied seats and
+  durable evidence.
+strategy: implementation
+strategyVersion: 1
+participants:
+  coordinator:
+    model: opus-5-5
+    effort: medium
+  implementer:
+    model: opus-5-5
+    effort: medium   # Opus 5.5 medium by default since 2026-09-26; high/xhigh selectable per run
+  auditor-1:
+    model: gpt-6.1-sol
+    effort: medium   # GPT-6.1 Sol medium is the default auditor since 2026-10-01 (GPT-6 Sol before)
+autoClose:
+  minimumVerification: review-only
+  justification: All occupied auditors must approve the current revision. With no auditors, closure explicitly records that independent review was not performed; absent tests never count as passed.
+budgets:
+  maxSteps: 120
+  wallClockMinutes: 240
+delivery:
+  action: apply-to-source

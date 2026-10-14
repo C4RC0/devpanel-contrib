@@ -1,0 +1,12 @@
+[Unit]
+Description=Proc filesystem for nested devpanel sandboxes
+Before=devpanel.service
+
+[Mount]
+What=proc
+Where=/run/devpanel/proc
+Type=proc
+Options=nosuid,nodev,noexec
+
+[Install]
+WantedBy=multi-user.target

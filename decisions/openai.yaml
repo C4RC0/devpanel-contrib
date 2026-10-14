@@ -1,0 +1,34 @@
+# The OpenAI Decisions API as an ADVISORY decision provider. See docs/decisions.md.
+#
+# Not active unless decisions/active.yaml says `provider: openai`; Jev is the
+# default. Same rules as Jev: it answers fixed-choice questions with
+# probabilities, never reads the repository, never writes, and is never
+# consulted for approvals, closure or dispositions.
+#
+# Public beta (developers.openai.com/api/docs/guides/decisions, read
+# 2026-10-07). Needs a real OpenAI API key; a ChatGPT login does not grant API
+# access. No key file is shipped: place one at credentialRef to use it.
+id: openai
+kind: openai
+title: OpenAI Decisions API (beta)
+endpoint: https://api.openai.com/v1/decisions
+model: gpt-6-luna
+credentialRef: file:~/.config/openai/key
+# UNTUNED: copied from Jev's starting point, not measured against this
+# provider. Tune it from shadow-mode data before relying on it.
+threshold: 0.9
+# Limits and timeouts are not documented; these are Jev's values.
+timeoutMs: 10000
+retries: 2
+maxWaitMs: 5000
+# The guide, 2026-10-07: $0.10 per million input tokens, no output, cache-read
+# or cache-write charges (regional premiums and long-context multipliers may
+# apply). The guide shows no usage object; a response without one is settled
+# at maxCallCostUsd as an unpriced call.
+pricing:
+  inputUsdPerMillionTokens: 0.10
+  outputUsdPerMillionTokens: 0
+# UNTUNED: a ceiling reserved before each call, not a measured cost.
+maxCallCostUsd: 0.01
+# The context limit is not documented; Jev's character cap until it is.
+maxStateChars: 100000

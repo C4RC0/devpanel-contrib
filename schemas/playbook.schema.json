@@ -1,0 +1,589 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/playbook.schema.json",
+  "title": "Playbook",
+  "description": "A named binding of a strategy to concrete participants, plus the deployment-specific bits (check target, budgets). Resolved and snapshotted at run start so editing this file cannot alter an in-flight run.",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "strategy",
+    "participants"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "strategy": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "strategyVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Pin. A run refuses to start if the on-disk strategy has a different version."
+    },
+    "participants": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Keys must exactly match the strategy's roles \u2014 every role bound, no extras.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "model"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "description": "A roster model id."
+          },
+          "effort": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "description": "Validated against that model's efforts AND the harness's effort capability. An unsupported combination is a load-time error, not a runtime surprise."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "Optional role instructions file, relative to the playbook."
+          }
+        }
+      }
+    },
+    "fallbackModels": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Optional roster allowlist for automatic quota substitutions. Omitted preserves default selection; an empty list disables substitution. Does not change the initially assigned seats."
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A playbook may STRENGTHEN the strategy's requirement (none -> optional -> required), never weaken it. A project that cannot be verified is not a reason to weaken a strategy that depends on verification \u2014 pick a different strategy.",
+      "properties": {
+        "requirement": {
+          "enum": [
+            "required",
+            "optional",
+            "none"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/checkTarget"
+        },
+        "concurrent": {
+          "type": "boolean",
+          "description": "Run the revision's checks while its reviewers review (default true). A failed check still sends the candidate back for another round; false runs checks before the reviews start."
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "May only tighten the strategy's budgets.",
+      "properties": {
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wallClockMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Ceiling on KNOWN cost in USD. Steps whose provider reports no price are counted separately and cannot be capped."
+        }
+      }
+    },
+    "overrides": {
+      "type": "object",
+      "description": "Narrow, explicit strategy overrides \u2014 loop round counts and the like. Dotted paths; the loader rejects any path outside an allow-list.",
+      "additionalProperties": {
+        "type": [
+          "integer",
+          "string",
+          "boolean"
+        ]
+      }
+    },
+    "autoClose": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Opting in to closing on review alone. Absent means the strategy's default applies, which is 'verified'.",
+      "properties": {
+        "minimumVerification": {
+          "enum": [
+            "verified",
+            "review-only"
+          ]
+        },
+        "justification": {
+          "type": "string",
+          "description": "Required when lowering to review-only, so the choice is recorded rather than inherited silently."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "minimumVerification": {
+                "const": "review-only"
+              }
+            },
+            "required": [
+              "minimumVerification"
+            ]
+          },
+          "then": {
+            "required": [
+              "justification"
+            ]
+          }
+        }
+      ]
+    },
+    "intent": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Default intent for runs of this playbook: an overlay defined by the strategy under intents/. A run may choose another through runOptions.intent."
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-playbook workspace choices. The base, symlink policy and isolation may be chosen here; clean-base rules are the strategy's.",
+      "properties": {
+        "base": {
+          "oneOf": [
+            {
+              "enum": [
+                "head",
+                "working-tree"
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "commit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "commit": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "symlinks": {
+          "enum": [
+            "reject",
+            "materialize",
+            "allow"
+          ]
+        },
+        "excludes": {
+          "type": "array",
+          "description": "Paths left out of the base snapshot (git pathspec globs relative to the checkout, e.g. runtime, config, **/node_modules): runtime state, secrets and dependency trees that are not source and would otherwise be committed into the base. Absent from the worktree entirely. Before snapshot selection v1 only working-tree bases applied them; under v1 (fence.selection: 1) they hold for every base policy and inside materialized links.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^:]"
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "completed": {
+              "enum": [
+                "delete",
+                "retain"
+              ]
+            },
+            "unsuccessful": {
+              "const": "retain"
+            }
+          }
+        },
+        "tooling": {
+          "$ref": "https://devpanel/schemas/strategy-template.schema.json#/properties/workspace/properties/tooling"
+        },
+        "isolation": {
+          "enum": [
+            "git-worktree",
+            "in-place"
+          ],
+          "description": "'in-place' works directly in the project checkout: no worktree, no patch, edits land live. Normally chosen per run (runOptions.isolation)."
+        },
+        "materializeGrants": {
+          "type": "array",
+          "description": "Snapshot selection v1: materialization targets allowed although they are not owned by a project this panel resolves. Each grant names a directory (absolute); a target inside it is copied under the owner's selection when it has a Git owner, whole otherwise. Anything else outside a known project is refused before copying.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "reason"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "reconcile": {
+          "type": "object",
+          "description": "Project setting only (projects/<id>.yaml; refused in a playbook). Per-path policy for `reconcile-delivery`, which merges an approved patch three-way onto source that drifted on the patch's own paths (docs/execution-contract.md \"Reconciling a delivery with drifted source\"). Keys are worktree-relative paths or globs; `append` resolves a merge conflict on such a path by keeping the source's content and appending the lines the candidate added there (only when the candidate's change to it is pure addition). Every other conflict, and any change to the reviewed delta outside these paths, refuses the reconciliation.",
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": { "enum": ["append", "prepend"] }
+        },
+        "related": {
+          "type": "array",
+          "description": "Phase 2 of the seat-access fence: other projects a run's seats may read. Each is exported at run start as a read-only snapshot of what its repository carries (no history, no ignored files) and mounted read-only in the seat fence; it is never part of the candidate and is removed when the workspace is released.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "project",
+              "reason"
+            ],
+            "properties": {
+              "project": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+-project$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Delivery may save a patch, commit a candidate, or apply approved changes to source. Implementation playbooks allow an explicit patch-only choice.",
+      "properties": {
+        "action": {
+          "enum": [
+            "worktree-diff",
+            "commit",
+            "apply-to-source"
+          ]
+        }
+      }
+    },
+    "deprecated": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "checkTarget": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ssh": {
+          "type": "object",
+          "required": [
+            "hostRef",
+            "workdir"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "hostRef": {
+              "type": "string",
+              "pattern": "^(env|file|ssh-config):",
+              "description": "Reference only \u2014 never an inline host/credential. ssh-config:<name> defers entirely to the user's ~/.ssh/config."
+            },
+            "userRef": {
+              "type": "string",
+              "pattern": "^(env|file):"
+            },
+            "identityRef": {
+              "type": "string",
+              "pattern": "^(env|file|agent):",
+              "description": "agent: uses the running ssh-agent; no key material is read or stored."
+            },
+            "workdir": {
+              "type": "string"
+            }
+          }
+        },
+        "materialize": {
+          "enum": [
+            "rsync",
+            "archive",
+            "git-push"
+          ],
+          "default": "archive",
+          "description": "How the candidate content reaches the target. Whatever is sent must reproduce the exact revision fingerprint on arrival, or the check result is rejected as not bound to the revision."
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "run"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "run": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean",
+                "default": true,
+                "description": "A failing non-required command is recorded but does not fail the check set."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 900
+              },
+              "kind": {
+                "enum": [
+                  "candidate",
+                  "privileged"
+                ],
+                "description": "SSH targets only (0e). candidate: the whole run text executes as the target's unit user inside a bubblewrap allow-list (read-only /usr, /etc and /sys, private /tmp, an empty home with only confinement.readOnly/writable, the candidate directory), in a transient unit; privileged: runs as the SSH account with the candidate and control directories masked, so it can manage units and read host logs but cannot read or execute candidate files. Absent: unconfined, labelled remote-unconfined."
+              },
+              "network": {
+                "type": "boolean",
+                "default": false,
+                "description": "candidate only: keep the host network (dependency installation). Otherwise the unit has a private network namespace."
+              },
+              "service": {
+                "type": "boolean",
+                "default": false,
+                "description": "candidate only: start the unit and return; the engine stops it after the finalizers. Its unit name is exported to every command as DEVPANEL_UNIT_<ID>."
+              },
+              "join": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$",
+                "description": "candidate only: the id of an earlier candidate service without network. The command enters that running service's own user and mount namespaces (its exact fenced view, found by the engine through systemd, never through a file the candidate wrote) and its private network: readiness probes and CLI selftests that inspect the application's processes and sockets."
+              },
+              "unprivilegedPorts": {
+                "type": "boolean",
+                "default": false,
+                "description": "candidate only, private network: allow binding ports below 1024 inside the unit's own namespace (a fixed engine command)."
+              },
+              "lifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1800,
+                "description": "service only: the unit's RuntimeMaxSec."
+              },
+              "needs": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9-]+$"
+                },
+                "description": "Earlier commands this one depends on (a join implies its service). After a required command fails, a command runs only if it declares needs (an empty list: independent) and every need passed; without needs it is skipped, and a skipped required command leaves the run's outcome unknown. Not allowed on finallyCommands, which always run."
+              },
+              "report": {
+                "type": "string",
+                "pattern": "^([a-z0-9][a-z0-9.]*-)?selftest$",
+                "description": "Declares what the command's stdout carries; changes nothing about how it runs. selftest: one `== <path>/selftest.report` line followed by that file's JSON (an older spelling with a site prefix, `<site>-selftest`, is read the same). When the command passed, the engine reads the failed tests from it and compares them with the base by test name: a failure the base does not have fails the check (gatingResult), an unreadable report while failures are listed fails it too, inherited failures do not."
+              }
+            }
+          }
+        },
+        "kind": {
+          "enum": [
+            "local",
+            "ssh"
+          ],
+          "description": "How checks are executed. An absent target means there is no mechanism at all, which yields an 'unavailable' RESULT \u2014 it never rewrites the requirement."
+        },
+        "finallyCommands": {
+          "$ref": "#/$defs/checkTarget/properties/commands",
+          "description": "Cleanup and log collection, attempted even after command failure or cancellation; each retains its own timeout."
+        },
+        "confinement": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "SSH targets: how kind: candidate commands are confined.",
+          "properties": {
+            "user": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_-]*$",
+              "description": "The unit user; when the SSH account is root the candidate directory is handed to it after arrival is verified. Without it, the host settings' testDrive.confinement.user; with neither, a kind: candidate command is refused."
+            },
+            "home": {
+              "type": "string",
+              "pattern": "^/[A-Za-z0-9_./-]+$",
+              "description": "The unit user's home, an empty tmpfs inside the fence. Without it, the host settings' testDrive.confinement.home."
+            },
+            "readOnly": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/[A-Za-z0-9_./-]+$"
+              },
+              "description": "Toolchain paths bound read-only (e.g. the unit user's ~/.nvm)."
+            },
+            "writable": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^/[A-Za-z0-9_./-]+$"
+              },
+              "description": "Paths bound writable (e.g. a package cache). Never secrets."
+            }
+          }
+        },
+        "projectRoot": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "SSH targets: the environment's own project root, which the confinement probe must prove invisible to candidate commands."
+        },
+        "compareBaseline": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the same commands on the run's base commit eagerly, once per run, concurrently with the first candidate check, and give reviewers a per-command line diff of stdout (base vs candidate). Without it the base is still captured, after the first failed candidate check, to tell inherited (baseline-known) failures from new ones. Doubles the first check's load on the target; off by default."
+        },
+        "timing": {
+          "enum": [
+            "every-revision",
+            "approved"
+          ],
+          "description": "When the target runs. every-revision (default for a playbook target): each new revision, beside its reviews. approved: only a revision every reviewer approved; a failure sends the author another round. For an expensive target (a staging test drive) approved skips the checks of revisions the reviewers send back anyway."
+        },
+        "retryFailed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3,
+          "default": 1,
+          "description": "How many times a failed check runs again on the same revision before the failure counts. Every attempt is recorded; a pass after a failure is marked flaky."
+        },
+        "tiers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "smoke"
+          ],
+          "properties": {
+            "smoke": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "description": "Ids of commands and finallyCommands that make the smoke tier. It runs on every recorded revision beside the reviews, and a failure sends the author another round. The full tier is the whole target, run once on the approved revision; only it counts for closure. Implies timing: approved."
+            }
+          }
+        },
+        "tier": {
+          "enum": [
+            "smoke",
+            "full"
+          ],
+          "description": "Set by the engine on the target of one tier's drive; never configured."
+        },
+        "baselineCache": {
+          "$ref": "#/$defs/baselineCache"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "ssh"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "ssh",
+              "commands"
+            ]
+          }
+        }
+      ]
+    },
+    "baselineCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^/[A-Za-z0-9_@./-]+$"
+          },
+          "description": "Files on the target whose content hashes are part of the key (the application snapshot identity), read over SSH for an ssh target. A project's testDrive names them through stagingFiles instead."
+        },
+        "environment": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A read-only command run on the target as the SSH account (locally for a local target), never inside a candidate; the sha256 of its stdout is the environment identity (host, installed runtimes, anything else the drive depends on)."
+        },
+        "maxEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 12,
+          "description": "Entries kept per project; the oldest beyond it are pruned."
+        },
+        "maxAgeDays": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 14,
+          "description": "Entries older than this are pruned."
+        }
+      },
+      "description": "Reuse the base drive across runs (issues/<project>/.baselines/). The key is exact: base commit, the tier target's definition hash, these files' content hashes and the environment command's output hash. A component that cannot be computed means no lookup and no store."
+    }
+  }
+}

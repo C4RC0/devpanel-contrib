@@ -1,0 +1,16 @@
+id: prompt
+version: 1
+title: Prompt
+description: One seat, one model, no coordination. For simple tasks that do not need a multi-agent workflow.
+strategy: prompt
+strategyVersion: 1
+participants:
+  worker:
+    model: opus-5-5
+    effort: high
+autoClose:
+  minimumVerification: review-only
+  justification: A single seat does the work and nobody reviews it. Closure records the absence of independent review; absent tests never count as passed.
+budgets:
+  maxSteps: 4
+  wallClockMinutes: 120

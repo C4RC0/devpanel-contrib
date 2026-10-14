@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/roster-model.schema.json",
+  "title": "Roster model",
+  "description": "One concrete model, bound to the harness that can run it. The only place a wire model identifier appears.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "harness",
+    "model",
+    "efforts",
+    "verification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]*$",
+      "description": "Friendly id used by playbooks, e.g. fable-5-1."
+    },
+    "title": {
+      "type": "string"
+    },
+    "harness": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Adapter id from harness/."
+    },
+    "profile": {
+      "type": "string",
+      "default": "default",
+      "description": "Configuration profile on that adapter. GLM-via-Claude is a profile of the claude adapter, not a separate adapter."
+    },
+    "model": {
+      "type": "string",
+      "description": "The identifier the harness itself expects, e.g. claude-fable-5-1."
+    },
+    "efforts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "description": "Effort levels this model supports on this harness. [] means the model supports NO effort setting — a real, verified fact. null means UNKNOWN — nobody has established it. Both reject a playbook naming an effort, but for different reasons and with different fixes."
+    },
+    "defaultEffort": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        null
+      ],
+      "description": "null when the model takes no effort setting (efforts: []). Otherwise must appear in efforts."
+    },
+    "contextWindow": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "null when unverified."
+    },
+    "credentialRef": {
+      "type": "string",
+      "pattern": "^(env|file|keyring):",
+      "description": "A reference only — env:NAME, file:/path, keyring:NAME. Never a credential value. The loader rejects anything that does not match this shape."
+    },
+    "account": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "description": "Another PERSON's login on the same provider, not another provider. Several people collaborating through one panel each have their own subscription; an account names an isolated config directory that person logs into once, and changes nothing else about the connection. Mutually exclusive with endpointRef/credentialRef, which describe a different provider rather than a different login."
+    },
+    "endpointRef": {
+      "type": "string",
+      "pattern": "^(env|file):",
+      "description": "Reference to a base URL override, for provider profiles such as GLM."
+    },
+    "notes": {
+      "type": "string"
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Whether this entry's claims have been established. An unverified model loads for preview but cannot be used in a live run.",
+      "properties": {
+        "status": {
+          "enum": [
+            "verified",
+            "unverified"
+          ]
+        },
+        "verifiedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "How it was established, e.g. 'codex --help + a probe turn'."
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "defaultEffort"
+        ]
+      },
+      "then": {
+        "description": "defaultEffort must appear in efforts; enforced by the loader, which JSON Schema cannot express across siblings."
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "account"
+        ]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "endpointRef"
+              ]
+            },
+            {
+              "required": [
+                "credentialRef"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "profile": {
+            "const": "default"
+          }
+        },
+        "$comment": "An account is another person's login on the SAME provider. endpointRef/credentialRef describe a different provider, and a non-default profile is provider routing — either would label the connection as something it is not."
+      }
+    }
+  ]
+}

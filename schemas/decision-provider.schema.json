@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/decision-provider.schema.json",
+  "title": "Decision provider",
+  "description": "An advisory classifier (decisions/<id>.yaml). It answers typed questions with probabilities and is never a harness, a seat or an authority: below the threshold, or unavailable, the caller falls back to its own behaviour.",
+  "type": "object",
+  "required": ["id", "endpoint", "model", "credentialRef", "threshold", "pricing", "maxCallCostUsd"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "title": { "type": "string" },
+    "kind": {
+      "enum": ["jev", "openai"],
+      "description": "Which client speaks to the endpoint: jev (TypeSafe Jev, the default when absent) or openai (the OpenAI Decisions API). Which provider is ACTIVE is decisions/active.yaml's choice, not this field's."
+    },
+    "endpoint": { "type": "string", "pattern": "^https://" },
+    "model": { "type": "string", "minLength": 1 },
+    "credentialRef": {
+      "type": "string",
+      "pattern": "^(env|file):.+",
+      "description": "Where the key is read from at each call (env:NAME or file:PATH, ~/ meaning the service user's home). The value is never stored, logged or recorded."
+    },
+    "threshold": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+    "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+    "retries": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "maxWaitMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
+    "pricing": {
+      "type": "object",
+      "required": ["inputUsdPerMillionTokens", "outputUsdPerMillionTokens"],
+      "additionalProperties": false,
+      "properties": {
+        "inputUsdPerMillionTokens": { "type": "number", "minimum": 0 },
+        "outputUsdPerMillionTokens": { "type": "number", "minimum": 0 }
+      }
+    },
+    "maxCallCostUsd": { "type": "number", "exclusiveMinimum": 0 },
+    "maxStateChars": { "type": "integer", "minimum": 1 }
+  }
+}

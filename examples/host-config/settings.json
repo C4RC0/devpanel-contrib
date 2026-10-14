@@ -1,0 +1,13 @@
+{
+  "projectsRoot": "/opt/projects",
+  "proxyLogin": {
+    "usersDir": "/var/lib/example-proxy/{hostname}/users",
+    "digestFiles": [".proxy.hash", ".hash"]
+  },
+  "projectActions": { "headerMarkers": ["EDITOR"] },
+  "testDrive": { "confinement": { "user": "app", "home": "/home/app" } },
+  "selection": { "forbiddenPrefixes": ["production", "staging"] },
+  "skill": { "linkBaseVariable": "EDITOR_LINKBASE" },
+  "reporter": { "panelUrl": "https://192.0.2.10" },
+  "seatGuidance": { "projects": ["devpanel-project"] }
+}

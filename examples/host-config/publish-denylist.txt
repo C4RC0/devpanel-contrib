@@ -1,0 +1,6 @@
+# Names of this installation that must never appear in the tracked tree
+# (npm run publish:check). One JavaScript regular expression per line,
+# matched case-insensitively against file contents and paths.
+example-company
+\.example-domain\.invalid\b
+/home/example-user/

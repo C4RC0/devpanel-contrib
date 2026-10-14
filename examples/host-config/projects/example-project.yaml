@@ -1,0 +1,62 @@
+# An example of one project's configuration, for <projects-root>/example-project.
+# Copy it to host-config/projects/<name>-project.yaml (docs/host-config.md) and
+# replace every example.invalid name: the file describes YOUR application, its
+# containers and its release procedures, so it stays out of the publishable tree.
+id: example-project
+notes: Example only. A boilerplate application with one staging and one production container.
+workspace:
+  base: working-tree
+  symlinks: materialize
+infrastructure:
+  kind: boilerplate
+  orientation: |-
+    The application checkout is <projects-root>/example-project. Its staging container is
+    staging.example.invalid and its production container production.example.invalid.
+    SSH configuration or the agent supplies authentication; never copy keys or
+    instance secrets. Source repository: <REPOSITORY_URL>.
+  staging:
+    id: staging
+    ssh:
+      hostRef: ssh-config:deploy@staging.example.invalid
+      workdir: /opt
+    projectRoot: /opt/staging.example.invalid
+    files:
+      application-log: /opt/staging.example.invalid/runtime/log/current/project.log
+    statusCommand: systemctl status project.service --no-pager --lines=30
+    notes: Shared staging instance. Candidate tests run isolated beside it.
+  deployments:
+    - id: production
+      ssh:
+        hostRef: ssh-config:deploy@production.example.invalid
+        workdir: /opt
+      projectRoot: /opt/production.example.invalid
+      files:
+        application-log: /opt/production.example.invalid/runtime/log/current/project.log
+      statusCommand: systemctl status project.service --no-pager --lines=30
+      notes: Read-only during authoring; promoted only through the Deployment playbook.
+  testDrive:
+    requirement: required
+    commands:
+      - id: selftest
+        run: npm test
+        timeoutSeconds: 900
+  release:
+    targets:
+      staging:
+        # The installed procedure tools/releases/<site>.py reads its target settings
+        # from host-config/releases/<site>-targets.json when the release runs. The
+        # workdir is the panel checkout's tools/releases (here installed in /opt/devpanel).
+        workdir: /opt/devpanel/tools/releases
+        ownership: Apply only the application's own source from the engine archive; preserve instance config, secrets, datastore and logs.
+        rollback: automatic
+        commands:
+          inspect: { run: 'python3 ./example.py inspect', timeoutSeconds: 60 }
+          checkpoint: { run: 'python3 ./example.py checkpoint', timeoutSeconds: 900 }
+          verifyCheckpoint: { run: 'python3 ./example.py verify-checkpoint', timeoutSeconds: 900 }
+          apply: { run: 'python3 ./example.py apply', timeoutSeconds: 1800 }
+          verifyRelease: { run: 'python3 ./example.py verify-release', timeoutSeconds: 300 }
+          restart: { run: 'python3 ./example.py restart', timeoutSeconds: 120 }
+          observe: { run: 'python3 ./example.py observe', timeoutSeconds: 240 }
+          test: { run: 'python3 ./example.py test', timeoutSeconds: 900 }
+          restore: { run: 'python3 ./example.py restore', timeoutSeconds: 900 }
+          verifyRestore: { run: 'python3 ./example.py verify-restore', timeoutSeconds: 120 }

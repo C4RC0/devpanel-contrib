@@ -1,0 +1,72 @@
+id: triage
+version: 2
+title: Triage
+description: A short coordinator handoff followed by a precise investigator disposition.
+tactic: triage
+roles:
+  coordinator:
+    description: Coordinates from supplied task, reports and engine evidence only; delegates technical work.
+    invokesOthers: false
+  investigator:
+    description: Checks the reported claim and records a short disposition.
+    writesCode: false
+    invokesOthers: false
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+  base: working-tree
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity: [critical, major]
+  protocolRepair:
+    maxAttempts: 1
+    onExhausted: block
+checks:
+  requirement: none
+  boundToRevision: true
+budgets:
+  maxSteps: 4
+  wallClockMinutes: 10
+  maxTokens: 100000
+  maxCostUsd: 1
+  onExhausted: unresolved
+phases:
+  - id: brief
+    step:
+      id: brief
+      role: coordinator
+      prompt: brief.md
+      output: triageBrief
+      context:
+        - issue
+        - window
+  - id: investigate
+    step:
+      id: investigate
+      role: investigator
+      prompt: investigate.md
+      output: triageDisposition
+      context:
+        - issue
+        - project
+        - steps.brief.output.prompt
+        - window
+completion:
+  requires:
+    - reportDispositionRecorded
+    - deliveryCompleted
+  autoClose:
+    minimumVerification: review-only
+  delivery:
+    action: none
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved

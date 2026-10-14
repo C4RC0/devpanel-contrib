@@ -1,0 +1,73 @@
+#!/bin/sh
+# Run one declared tooling command with no network: a fresh network namespace
+# with loopback only (bubblewrap --unshare-net). Bound read-only into every seat
+# fence at /run/devpanel/tooling/offline (harness/fence.mjs TOOLING_BIN).
+#
+#   offline <program> [args...]      no "--" separator: the wrapper adds bwrap's own
+#
+# When that namespace cannot start (Codex's workspace-write sandbox refuses it:
+# its seccomp filter denies every socket family but AF_UNIX, NETLINK included),
+# the runtime's own denial is accepted only when proved for this process first:
+# a seccomp filter is installed (inherited by the command, never removable) and
+# creating a TCP or UDP socket, IPv4 or IPv6, is refused with EPERM. A filter
+# that lets sockets be created (refusing only bind or listen, say) is not
+# accepted. Loopback is refused too, so a command that listens on it fails here.
+#
+# Nothing the seat's environment controls takes part in the decision: the
+# dynamic loader's variables (LD_*) are dropped before anything is executed, so
+# no preload reaches bwrap, the verifier or the command; bwrap and the verifier
+# are fixed paths; the verifier runs with every variable unset, in Python's
+# isolated mode; everything else here is a shell builtin (no PATH lookup). Only
+# a verifier that exits 0 with a final line carrying the nonce made for this
+# call counts as proof (one that stops early or fails proves nothing).
+#
+# Exit 64: usage. Exit 125: network isolation could not start in this seat and
+# no denial was proved, so the command was NOT run. There is no fallback to
+# running it with network.
+BWRAP=/usr/bin/bwrap
+VERIFIER=/usr/bin/python3
+NL='
+'
+# Unset every exported variable whose name matches the pattern $1 (builtins only).
+drop () {
+  while IFS= read -r line; do
+    case $line in 'export '*|'declare -x '*) name=${line#export }; name=${name#declare -x }; name=${name%%=*}
+      # A readonly variable would end the shell: it stays, and is never the loader's.
+      case $name in $1) (unset "$name") 2>/dev/null && unset "$name" ;; esac ;;
+    esac
+  done <<EOF
+$(export -p)
+EOF
+}
+drop 'LD_*'
+if [ "$#" -eq 0 ]; then echo 'devpanel-offline: usage: offline <program> [args...]' >&2; exit 64; fi
+if [ "$1" = "--" ]; then echo 'devpanel-offline: no "--" separator; pass the program directly' >&2; exit 64; fi
+if err=$("$BWRAP" --dev-bind / / --unshare-net --die-with-parent -- /bin/true 2>&1); then
+  exec "$BWRAP" --dev-bind / / --unshare-net --die-with-parent -- "$@"
+fi
+NO_IP='
+import errno, re, socket, sys
+if not re.search(r"^Seccomp:\s*2$", open("/proc/self/status").read(), re.M): print("no seccomp filter on this process"); sys.exit(1)
+opened = []
+for family, fname in ((socket.AF_INET, "IPv4"), (socket.AF_INET6, "IPv6")):
+    for kind, kname in ((socket.SOCK_STREAM, "TCP"), (socket.SOCK_DGRAM, "UDP")):
+        try:
+            socket.socket(family, kind).close()
+            opened.append(f"{kname}/{fname} created")
+        except OSError as e:
+            if e.errno != errno.EPERM: opened.append(f"{kname}/{fname} {errno.errorcode.get(e.errno, e.errno)}")
+if opened: print("IP sockets are not refused (" + ", ".join(opened) + ")"); sys.exit(1)
+print("proved " + sys.argv[1])
+'
+nonce=
+IFS= read -r nonce < /proc/sys/kernel/random/uuid 2>/dev/null
+why=$(drop '*'; exec "$VERIFIER" -I -S -c "$NO_IP" "$nonce" 2>&1)
+status=$?
+if [ "$status" -eq 0 ] && [ -n "$nonce" ] && [ "${why##*"$NL"}" = "proved $nonce" ]; then
+  echo 'devpanel-offline: isolation inherited: no network namespace here, but this runtime refuses IP sockets (proved: seccomp filter, EPERM creating TCP and UDP sockets, IPv4 and IPv6); loopback is refused too' >&2
+  exec "$@"
+fi
+echo "devpanel-offline: network isolation could not start in this seat: ${err:-bwrap unavailable}" >&2
+echo "devpanel-offline: and the runtime's own network denial is not proved: ${why:-verifier unavailable}" >&2
+echo 'devpanel-offline: the command was NOT run (no network fallback)' >&2
+exit 125

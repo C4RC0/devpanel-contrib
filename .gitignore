@@ -1,0 +1,35 @@
+# Private keys and certificates are per-host and must never be committed.
+cert/
+*.key
+*.pem
+*.p12
+.devpanel-token
+# The panel address install-on-osx.sh records for the command-line client; per install.
+.devpanel-url
+
+# Issues and runs are host data written by the engine and the API, not source:
+# reports, step outputs, run records, retained worktrees, check archives and the
+# supervisor's state. They stay on the host and are never committed with code.
+/issues/
+
+logs/
+
+# Operational scratch left at the repository root by release campaigns (candidate archives).
+/runtime/
+
+# Python bytecode from running tools/releases tests; generated, never source.
+__pycache__/
+*.pyc
+
+# An installation's own configuration (docs/host-config.md): its projects,
+# roster entries naming a person's login, release targets, live-check reports,
+# settings, publish denylist and docs. host-config/ is where
+# tools/migrate-host-config.mjs moves them; the in-tree paths are ignored so that
+# a new private file there is never committed. Files that are still tracked stay
+# tracked until that migration untracks them.
+/host-config/
+/projects/*.yaml
+/tools/releases/*-targets.json
+/gui/live/reports/
+# Its notes for agents, beside CLAUDE.md.
+/CLAUDE.local.md

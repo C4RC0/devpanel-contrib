@@ -1,0 +1,33 @@
+id: maintenance
+title: Maintenance
+description: >
+  Updating dependencies and lockfiles, fixing build, packaging or CI configuration, and moving to a newer runtime or toolchain where the change is contained.
+covers:
+  - dependency-updating
+  - build-maintenance
+  - ci-cd-maintenance
+  - platform-upgrading
+guidance:
+  triage: |
+    Confirm what is outdated or broken and why it matters now. Criteria: the
+    update or fix is applied, the lockfile or configuration is consistent, and
+    nothing that depended on the old version is left broken — name what to check.
+  handoff-plan: |
+    Ask for the exact versions or settings before and after, the changelog items
+    that affect this project, and what must be re-verified.
+  plan: |
+    List the changes with versions. Read the upstream changelog for breaking
+    changes and name each one that applies. Say what cannot be verified on this
+    box.
+  audit-plan: |
+    Check breaking changes were actually looked for, not assumed absent, and that
+    transitive effects (peer dependencies, node engine, build output) are covered.
+  implement: |
+    Apply the update and every adaptation it forces. Regenerate lockfiles with the
+    project's tool, never by hand. Do not bundle unrelated upgrades.
+  audit-implementation: |
+    Confirm lockfile and manifest agree, breaking changes are handled, and no
+    unrelated version moved.
+  confirm: |
+    Record what was verified here and what only a build or CI run elsewhere can
+    confirm; the latter is residual risk.

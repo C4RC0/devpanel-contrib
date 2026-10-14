@@ -1,0 +1,25 @@
+id: review
+title: Code or design review
+description: >
+  Reviewing a proposed change, dependency or design attached to the issue for correctness, maintainability and risks, and answering review comments.
+covers:
+  - code-review
+guidance:
+  triage: |
+    Locate the material to review in the issue folder (a patch, a link, a
+    document). If it is not there, `fit` is false. Criteria: every substantive
+    risk found is stated with location and severity; the verdict is justified;
+    what was not reviewed is named.
+  handoff-draft: |
+    Ask for findings first, ordered by severity with locations, then the verdict,
+    then what was out of reach.
+  draft: |
+    Review the material as it is. Findings with location, severity and why it
+    matters; separate blocking from advisory. Give a verdict and its reasoning.
+    State what you could not assess (could not run, missing context).
+  audit-draft: |
+    Check for missed risks and for findings that are unfair or wrong about the
+    code. A verdict the findings do not support is a finding.
+  confirm: |
+    Confirm the review covers the material and its verdict follows; anything not
+    reviewed is residual risk.

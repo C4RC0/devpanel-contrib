@@ -1,0 +1,25 @@
+id: spec
+title: Technical specification
+description: >
+  Writing a design or implementation specification before development: interfaces, data, behaviour, failure handling, and how it will be verified.
+covers:
+  - technical-specification-writing
+guidance:
+  triage: |
+    Establish what is being specified and what decisions are already made.
+    Criteria: interfaces and data are defined precisely; behaviour including
+    failure is specified; the verification approach is stated; alternatives
+    considered are recorded with why they lost.
+  handoff-draft: |
+    Ask for a specification an implementer could build from without asking
+    questions, and for the questions that remain anyway.
+  draft: |
+    Specify interfaces, data, behaviour, errors and limits. Reference the existing
+    code the design must fit. Record alternatives and why they were rejected.
+    Say how each part would be verified. Open decisions go in openQuestions.
+  audit-draft: |
+    Try to implement it in your head: every point where you would have to guess is
+    a finding. Check it fits the code as it is, not as one might wish.
+  confirm: |
+    Confirm the specification is buildable as written; unresolved decisions are
+    residual risk.

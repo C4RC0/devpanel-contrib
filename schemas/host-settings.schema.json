@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/host-settings.schema.json",
+  "title": "Host settings",
+  "description": "One installation's own defaults (<host-config>/settings.json, docs/host-config.md \"Host settings\"). Every key is optional; an absent key keeps the neutral default, which names no installation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "projectsRoot": {
+      "type": "string",
+      "pattern": "^/",
+      "description": "The directory whose <name>-project entries are the projects. DEVPANEL_PROJECTS_DIR still wins; without either it is the directory holding the panel's own checkout."
+    },
+    "proxyLogin": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The reverse proxy's HTTP basic-auth login (server/proxy-user.mjs).",
+      "properties": {
+        "usersDir": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Where the proxy publishes its users' credential files, <usersDir>/<user>/<file>; `{hostname}` is replaced by this host's name. DEVPANEL_USERS_DIR still wins. Without one, a login name is used as the actor but never verified."
+        },
+        "digestFiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^\\.[A-Za-z0-9._-]+$" },
+          "description": "Names of the files in a user's directory that hold a SHA-512 hex digest; any one admits. Default [\".hash\"]."
+        }
+      }
+    },
+    "projectActions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "headerMarkers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "description": "Words read as script header markers (`# <MARKER> key: value`) besides DEVPANEL, which is always read."
+        }
+      }
+    },
+    "testDrive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confinement": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "The unit user and home of `kind: candidate` commands when a project's testDrive.confinement does not name them.",
+          "properties": {
+            "user": { "type": "string", "pattern": "^[a-z_][a-z0-9_-]*$" },
+            "home": { "type": "string", "pattern": "^/[A-Za-z0-9_./-]+$" }
+          }
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "forbiddenPrefixes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "description": "Entries of the projects root named <prefix>.<anything> are container filesystems no run may read (runtime/selection.mjs forbiddenRoots). Replaces the default [\"production\", \"staging\"]."
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "linkBaseVariable": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "An environment variable the devpanel skill client reads as its link base when DEVPANEL_LINKBASE is unset (an editor terminal that exports one under its own name)."
+        }
+      }
+    },
+    "reporter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "panelUrl": {
+          "type": "string",
+          "pattern": "^https?://",
+          "description": "The panel's private address that tools/provision-reporter.mjs gives a deployment when --url is not passed."
+        }
+      }
+    },
+    "seatGuidance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Installation notes given to run seats (runtime/host-guidance.mjs): CLAUDE.local.md and <host-config>/docs/, frozen into the run's evidence at start. Nothing is exposed without it.",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,189 @@
+#!/usr/bin/env node
+// Command-line client for the devpanel API, used by the devpanel skill (SKILL.md beside it).
+//
+// It only opens issues, reads their state and adds material to them. Starting a run is deliberately
+// absent: a start spends money and belongs to the operator or the top-level supervisor. `answer` is the
+// one command that can start a run, because the server restarts the same playbook after an owner answer.
+import fs from 'node:fs';
+import https from 'node:https';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The panel's own checkout, found from this file (node resolves the ~/.claude/skills symlink for the main
+// module): the checkout the skill is linked from on a Linux host, ~/devpanel on a Mac (install-on-osx.sh).
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+// DEVPANEL_URL, else the .devpanel-url install-on-osx.sh writes (its port is not 443), else the hosts' default.
+const URL_FILE = path.join(ROOT, '.devpanel-url');
+const SERVER = new URL(process.env.DEVPANEL_URL ?? (fs.existsSync(URL_FILE) ? fs.readFileSync(URL_FILE, 'utf8').trim() : 'https://localhost:443'));
+const LINKBASE = linkBase();
+
+// Where paths in the output link to: DEVPANEL_LINKBASE, else the variable an editor's terminal exports under
+// its own name, which the host settings name (skill.linkBaseVariable; docs/host-config.md "Host settings").
+// Read without the server's modules: the host-config settings, or their carried copy while a move is pending.
+function linkBase () {
+    if (process.env.DEVPANEL_LINKBASE) return process.env.DEVPANEL_LINKBASE;
+    const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+    const hostDir = path.resolve(ROOT, process.env.DEVPANEL_HOST_CONFIG_DIR || 'host-config');
+    let settings = read(path.join(hostDir, 'settings.json'));
+    if (!settings && !process.env.DEVPANEL_HOST_CONFIG_DIR) {
+        const carried = read(path.join(ROOT, 'tools', 'host-move', 'manifest.json'))?.entries?.find((e) => e.to === 'host:settings.json');
+        if (typeof carried?.from === 'string' && !carried.from.split('/').includes('..')) settings = read(path.join(ROOT, carried.from));
+    }
+    const name = settings?.skill?.linkBaseVariable;
+    return (typeof name === 'string' && /^[A-Z][A-Z0-9_]*$/.test(name) && process.env[name]) || '';
+}
+
+const USAGE = `usage: devpanel.mjs [-p <project>] <command> ...
+  open <file.md|->            open an issue; the first heading is its title
+  list                        open issues with their latest run
+  status <id>                 issue state, latest run explanation, triage questions
+  result <id>                 the latest run's result.md and patch location
+  note <id> <file.md|->       add a note step (context for the next run)
+  answer <id> <file.json|->   answer triage questions; RESTARTS the run (paid)
+<id> may be a unique prefix or slug fragment. Project defaults to the nearest *-project directory above the cwd.`;
+
+function fail(message) {
+    console.error(message);
+    process.exit(1);
+}
+
+// The token is readable by the panel's owner only; a fenced seat cannot see it, which is the point (general §008).
+// Without it the request goes out bare: a local install (DEVPANEL_AUTH=local) admits a loopback client, any other
+// server answers 401, and that error names the file.
+function token() {
+    try {
+        return process.env.DEVPANEL_TOKEN?.trim() || fs.readFileSync(path.join(ROOT, '.devpanel-token'), 'utf8').trim();
+    } catch {
+        return null;
+    }
+}
+
+// node:https rather than fetch: the panel's certificate is self-signed, and fetch has no per-request opt-out.
+function api(method, url, body) {
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const bearer = token();
+    const headers = { ...(bearer && { Authorization: `Bearer ${bearer}` }), ...(payload && { 'Content-Type': 'application/json' }) };
+    return new Promise((resolve, reject) => {
+        const req = https.request({ host: SERVER.hostname.replace(/^\[|\]$/g, ''), port: SERVER.port || 443, path: url, method, headers, rejectUnauthorized: false }, (res) => {
+            let text = '';
+            res.setEncoding('utf8');
+            res.on('data', (d) => (text += d));
+            res.on('end', () => {
+                const type = res.headers['content-type'] ?? '';
+                const data = type.includes('json') ? JSON.parse(text || 'null') : text;
+                const hint = res.statusCode === 401 && !bearer ? ` (no token: cannot read ${ROOT}/.devpanel-token)` : '';
+                if (res.statusCode >= 400) reject(new Error(`${method} ${url}: ${res.statusCode} ${data?.error ?? data?.message ?? text}${hint}`));
+                else resolve(data);
+            });
+        });
+        req.on('error', (e) => reject(new Error(`devpanel unreachable at ${SERVER.origin}: ${e.message}`)));
+        req.end(payload);
+    });
+}
+
+function readInput(file) {
+    if (!file) fail(USAGE);
+    return fs.readFileSync(file === '-' ? 0 : file, 'utf8');
+}
+
+const link = (p, text = path.basename(p)) => (LINKBASE ? `[${text}](${LINKBASE}${p})` : p);
+const base = (project) => `/api/projects/${encodeURIComponent(project)}`;
+
+// The nearest ancestor named *-project, wherever the projects live (/srv on the hosts, DEVPANEL_PROJECTS_DIR on a Mac).
+function projectOf(given) {
+    const name = given ?? process.cwd().split(path.sep).reverse().find((part) => part.endsWith('-project'));
+    if (!name) fail('no project: pass -p <project> or run inside a <name>-project directory');
+    return name.endsWith('-project') ? name : `${name}-project`;
+}
+
+async function resolveId(project, wanted) {
+    if (!wanted) fail(USAGE);
+    const issues = await api('GET', `${base(project)}/issues`);
+    const exact = issues.find((i) => i.id === wanted);
+    if (exact) return exact.id;
+    const hits = issues.filter((i) => i.id.startsWith(wanted) || i.slug.includes(wanted));
+    if (hits.length === 1) return hits[0].id;
+    fail(hits.length ? `ambiguous id "${wanted}":\n${hits.map((i) => `  ${i.id}`).join('\n')}` : `no open issue matches "${wanted}" in ${project}`);
+}
+
+function describeRun(run) {
+    if (!run) return ['no run yet'];
+    const e = run.explanation ?? {};
+    const lines = [`latest run ${run.runId} (${run.playbook}): ${run.status} / ${run.result}${run.live ? ' — LIVE' : ''}`];
+    if (e.headline) lines.push(`  ${e.headline}`);
+    if (e.detail) lines.push(`  ${e.detail}`);
+    for (const u of e.unmet ?? []) lines.push(`  unmet ${u.id}: ${u.text}`);
+    if (run.pauseQuestion) lines.push(`  paused, asks: ${run.pauseQuestion}`);
+    if (e.next) lines.push(`  next: ${e.next}`);
+    return lines;
+}
+
+const commands = {
+    async open(project, file) {
+        const input = readInput(file);
+        // The server reads one-line input as a bare title, or as a path to read if it ends in .md (issues.js createIssue).
+        if (!/^#\s+\S/m.test(input) || !input.trim().includes('\n')) fail('the input must be a markdown report: a "# Title" heading and a body');
+        const issue = await api('POST', `${base(project)}/issues`, { input, actor: 'claude' });
+        console.log(`opened ${project}/${issue.id}\n${link(issue.path, issue.id)}`);
+    },
+
+    async list(project) {
+        for (const i of await api('GET', `${base(project)}/issues`)) {
+            const run = i.latestRun;
+            const state = run ? `${run.status}/${run.result}${run.live ? ' LIVE' : ''}` : 'no run';
+            console.log(`${i.id}  [${state}]${i.priority ? ` ${i.priority.value}` : ''}${i.disposition ? ` (${i.disposition.value})` : ''}`);
+        }
+    },
+
+    async status(project, wanted) {
+        const id = await resolveId(project, wanted);
+        const issue = await api('GET', `${base(project)}/issues/${id}`);
+        console.log(`${issue.name}\n${project}/${id} — ${issue.status}, ${issue.runCount} run(s), ${link(issue.path, 'folder')}`);
+        if (issue.disposition) console.log(`disposition: ${issue.disposition.value} — ${issue.disposition.evidence ?? ''}`);
+        console.log(describeRun(issue.latestRun).join('\n'));
+        const asked = issue.latestRun?.ownerInput;
+        if (!asked || asked.answered) return;
+        // The list summary drops question ids; answering needs them, so read the run itself.
+        const run = await api('GET', `${base(project)}/issues/${id}/runs/${issue.latestRun.runId}`);
+        const o = run.ownerInput ?? {};
+        console.log(`\ntriage verdict: ${o.verdict}${o.reason ? ` — ${o.reason}` : ''}`);
+        for (const q of o.questions ?? []) console.log(`  ${q.id}: ${q.question}${q.recommendation ? `\n      recommended: ${q.recommendation}` : ''}`);
+        for (const part of o.split ?? []) console.log(`  split part: ${part.title} — ${part.scope}`);
+    },
+
+    async result(project, wanted) {
+        const id = await resolveId(project, wanted);
+        const issue = await api('GET', `${base(project)}/issues/${id}`);
+        const step = [...(issue.steps ?? [])].reverse().find((s) => s.run?.kind === 'result');
+        if (!step) return console.log('no result yet');
+        const text = await api('GET', `${base(project)}/issues/${id}/steps/${step.number}/files/result.md`);
+        console.log(text);
+        const patch = step.files.find((f) => f.name === 'changes.patch');
+        console.log(`---\n${link(path.join(step.path, 'result.md'))}${patch ? `  ${link(path.join(step.path, 'changes.patch'))} (${patch.size} bytes)` : '  (no patch)'}`);
+    },
+
+    async note(project, wanted, file) {
+        const id = await resolveId(project, wanted);
+        const step = await api('POST', `${base(project)}/issues/${id}/steps`, { name: 'note', text: readInput(file) });
+        console.log(`added ${step.id} to ${project}/${id}`);
+    },
+
+    // Body: { "actor": "<who decided>", "answers": { "Q1": "..." } } or { "actor": ..., "split": "accept" | "decline" }, optional "note".
+    async answer(project, wanted, file) {
+        const id = await resolveId(project, wanted);
+        const body = JSON.parse(readInput(file));
+        if (!body.actor) fail('the answer needs "actor": the person who decided, not the model');
+        const issue = await api('GET', `${base(project)}/issues/${id}`);
+        const run = issue.latestRun;
+        if (!run?.ownerInput || run.ownerInput.answered) fail('the latest run has no unanswered triage questions');
+        const r = await api('POST', `${base(project)}/issues/${id}/runs/${run.runId}/owner-input`, body);
+        console.log(JSON.stringify(r, null, 2));
+    },
+};
+
+const args = process.argv.slice(2);
+let given = null;
+if (args[0] === '-p') [, given] = args.splice(0, 2);
+const [command, ...rest] = args;
+if (!commands[command]) fail(USAGE);
+commands[command](projectOf(given), ...rest).catch((e) => fail(e.message));

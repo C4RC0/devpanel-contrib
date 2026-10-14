@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/revision-fingerprint.schema.json",
+  "title": "Revision fingerprint",
+  "description": "Identity of a candidate. Deliberately NOT a git diff (which omits untracked files) and NOT a commit hash (which misses uncommitted work). It is a canonical hash over the complete deliverable content set, including additions and deletions, so an approval provably names the content that gets delivered.",
+  "type": "object",
+  "required": ["algorithm", "baseCommit", "entries", "fingerprint", "computedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "algorithm": { "const": "sha256" },
+    "baseCommit": {
+      "type": ["string", "null"],
+      "description": "The worktree's explicit base commit. null only when isolation is unsupported, which the strategy blocks by default."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was considered deliverable. Recorded so a later fingerprint over a different scope is not mistaken for the same candidate.",
+      "properties": {
+        "includeUntracked": { "const": true },
+        "excludes": { "type": "array", "items": { "type": "string" }, "description": "Glob patterns excluded from the deliverable set, e.g. node_modules." }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "description": "Every deliverable path, sorted by path for canonical serialization. Deletions are recorded explicitly rather than being absent, so removing a file changes the fingerprint.",
+      "items": {
+        "type": "object",
+        "required": ["path", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "status": { "enum": ["added", "modified", "deleted", "unchanged"] },
+          "mode": { "type": "string", "pattern": "^[0-7]{6}$" },
+          "contentHash": { "type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$|^$", "description": "null for deleted entries." }
+        }
+      }
+    },
+    "fingerprint": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "computedAt": { "type": "string", "format": "date-time" }
+  }
+}

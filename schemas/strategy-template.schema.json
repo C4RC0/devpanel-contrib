@@ -1,0 +1,633 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/strategy-template.schema.json",
+  "title": "Strategy template",
+  "description": "A model-agnostic algorithm: abstract roles, phases, review rules and completion semantics. Declarative on purpose \u2014 configuration never carries executable code.",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "roles",
+    "reviewPolicy",
+    "phases",
+    "completion"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "roles": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Abstract roles a playbook must bind to concrete participants.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "description"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "writesCode": {
+            "type": "boolean",
+            "default": false,
+            "description": "At most one role may set this. Within a run it is the sole writer to the workspace."
+          },
+          "invokesOthers": {
+            "const": false,
+            "description": "Always false. The engine owns invocation, session ownership, ordering, budgets and cancellation; a coordinator influences others only by authoring handoff prompts."
+          },
+          "optional": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isolation": {
+          "enum": [
+            "git-worktree",
+            "none"
+          ],
+          "default": "git-worktree"
+        },
+        "requireCleanBase": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enforced at provisioning for base 'head': a checkout with tracked modifications refuses to start. Ignored for 'working-tree', whose whole point is a dirty checkout, and for an explicit commit."
+        },
+        "base": {
+          "description": "What the worktree is cut from. 'head': the checked-out commit (refused when dirty and requireCleanBase). 'working-tree': a snapshot commit of the checkout as it is, tracked and untracked, symlinks included \u2014 for projects whose live state is not committed. { commit: <ref> }: an explicit ref. A playbook or a run may override; the choice and the resulting base commit are recorded on the run.",
+          "oneOf": [
+            {
+              "enum": [
+                "head",
+                "working-tree"
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "commit"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "commit": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ],
+          "default": "head"
+        },
+        "onUnsupported": {
+          "enum": [
+            "block",
+            "run-without-isolation"
+          ],
+          "default": "block",
+          "description": "Non-Git projects cannot be isolated. Default is to block rather than let an author loose on a live tree."
+        },
+        "symlinks": {
+          "enum": [
+            "reject",
+            "materialize",
+            "allow"
+          ],
+          "default": "reject",
+          "description": "What to do with symlinks in the worktree whose target resolves outside it. reject (default): refuse to provision and list them \u2014 a write through such a link changes a live file while the candidate's fingerprint records only the link. materialize: replace each with a copy of its target inside the worktree and re-snapshot, so the candidate is self-contained and the copy is the base. allow: keep them, record them on the run, and accept that writes through them are not captured."
+        },
+        "tooling": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "What a participant's runtime may reach beyond the worktree and the run's scratch directory. Enforced by the adapters where the runtime allows (Claude: read/edit denied outside allowed roots through its permission settings, allowed roots added; Codex: a workspace-write sandbox rooted at the worktree), recorded on the run, and stated in the prompt. Bash cannot be path-fenced by either runtime; the recorded policy is what an auditor checks a transcript against.",
+          "properties": {
+            "allowLiveCheckout": {
+              "type": "boolean",
+              "default": false,
+              "description": "May the runtime read the project's live checkout (the directory the worktree was cut from)? Default no: tooling loaded from there runs code outside the candidate."
+            },
+            "allowedRoots": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": [],
+              "description": "Additional absolute paths the runtime may read, e.g. a shared tooling directory. Never written."
+            },
+            "mounts": {
+              "type": "array",
+              "description": "Project setting only (projects/<id>.yaml; refused in a strategy or playbook). Host directories bind-mounted READ-ONLY into the seat fence at a worktree-relative path, so a seat can run the project's own tooling (its node_modules, a browser, a formatter install) without installing anything. Proved inside the fence before launch. A source that does not exist is not a configuration error: it resolves as missing (config:check --project warns) and every seat turn of that project is refused, naming the path. Mounted paths are left out of the snapshot, the fingerprint and the patch.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["target", "source"],
+                "properties": {
+                  "target": { "type": "string", "minLength": 1, "description": "Where the directory appears, relative to the worktree root (e.g. gui/node_modules). Normalised, no '..', no '.git', not nested in another target." },
+                  "source": { "type": "string", "minLength": 1, "description": "The host directory: absolute, or relative to the project checkout. Inside the project's own checkout it must hold nothing the snapshot selects (dependency trees, not source)." },
+                  "provisional": { "type": "boolean", "description": "The path is the configuration's best knowledge, not yet proved by a live tooling turn (npm run live -- --tooling)." },
+                  "description": { "type": "string" }
+                }
+              }
+            },
+            "commands": {
+              "type": "array",
+              "description": "Project setting only. The commands a seat may use with the mounted tooling. Authors, auditors and the coordinator are given each one in the form the engine renders (cd <cwd> && /run/devpanel/tooling/offline sh -c '<run>'): it runs with no network, and a listed command is not 'could not run' unless the attempt and its output are quoted.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "run"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+                  "run": { "type": "string", "minLength": 1, "description": "A shell command line, run by sh -c inside the network-isolated wrapper. <placeholders> are for the seat to fill in." },
+                  "cwd": { "type": "string", "description": "Worktree-relative working directory; the worktree root when absent." },
+                  "provisional": { "type": "boolean" },
+                  "description": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "completed": {
+              "enum": [
+                "delete",
+                "retain"
+              ]
+            },
+            "unsuccessful": {
+              "const": "retain"
+            }
+          }
+        }
+      }
+    },
+    "reviewPolicy": {
+      "type": "object",
+      "required": [
+        "substantial",
+        "protocolRepair"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "substantial": {
+          "type": "object",
+          "description": "Defines what counts as substantial \u2014 the thing that keeps a ping-pong loop going. Anything not matching is recorded but does not block.",
+          "required": [
+            "anyOf"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "blocking": {
+                    "type": "boolean"
+                  },
+                  "severity": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "info",
+                        "minor",
+                        "major",
+                        "critical"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "protocolRepair": {
+          "type": "object",
+          "required": [
+            "maxAttempts",
+            "onExhausted"
+          ],
+          "additionalProperties": false,
+          "description": "An unparseable or self-contradictory result is a protocol failure, not a review finding. Repair asks the same participant to restate in the required shape; it never routes work to the author.",
+          "properties": {
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5
+            },
+            "onExhausted": {
+              "const": "block",
+              "description": "The run enters blocked and waits for a human. It must never fall through to changes-needed."
+            }
+          }
+        },
+        "concurrentReviews": {
+          "type": "boolean",
+          "description": "Run the occupied reviewers of one consensus round at the same time (default true). Consensus is folded after all of them are recorded either way; false keeps them one after another."
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How much this strategy's conclusions depend on verification. This is POLICY only \u2014 whether checks can actually run is a runtime outcome, recorded as a result in run.json, and never feeds back into policy.",
+      "properties": {
+        "requirement": {
+          "enum": [
+            "required",
+            "optional",
+            "none"
+          ],
+          "default": "optional",
+          "description": "required: auto-close needs a passed result on the approved fingerprint; an unavailable target BLOCKS the run rather than downgrading. optional: a result, if there is one, must not be failed. none: checks play no part."
+        },
+        "boundToRevision": {
+          "const": true
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxSteps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "wallClockMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Ceiling on KNOWN cost in USD. Steps whose provider reports no price are counted separately and cannot be capped."
+        },
+        "onExhausted": {
+          "const": "unresolved",
+          "description": "Budget exhaustion always leaves the issue unresolved."
+        }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How a runtime failure classified as rate-limit or transient is retried. Quota, credential and environment failures are never retried.",
+      "properties": {
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Retries per turn (default 3)."
+        },
+        "baseDelaySeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "First wait; doubles per retry (default 30)."
+        },
+        "maxDelaySeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Cap on any wait (default 600). A provider's own retry-after is honoured within the cap."
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/phase"
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "requires",
+        "autoClose",
+        "delivery",
+        "onFailure"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "requires": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "sameRevisionApproval",
+              "checksSatisfied",
+              "noOutstandingBlockingFindings",
+              "coordinatorConfirmation",
+              "deliveryCompleted",
+              "reportDispositionRecorded",
+              "workerCompletion"
+            ]
+          }
+        },
+        "delivery": {
+          "type": "object",
+          "required": [
+            "action",
+            "revalidateBeforeDelivery"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "enum": [
+                "none",
+                "worktree-diff",
+                "commit",
+                "merge",
+                "apply-to-source"
+              ],
+              "description": "Different completion points. 'none' produces a candidate and stops; the artifact remains under runs/<run-id>/artifacts/."
+            },
+            "revalidateBeforeDelivery": {
+              "const": true,
+              "description": "Re-derive the fingerprint immediately before delivering. If integration changed the candidate, approval and checks are stale and must be renewed."
+            }
+          }
+        },
+        "onFailure": {
+          "type": "object",
+          "required": [
+            "roundsExhausted",
+            "disagreement",
+            "budgetExhausted",
+            "protocolBlocked",
+            "checksUnavailable",
+            "closureNotAuthorised"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "roundsExhausted": {
+              "const": "unresolved"
+            },
+            "disagreement": {
+              "const": "unresolved"
+            },
+            "budgetExhausted": {
+              "const": "unresolved"
+            },
+            "protocolBlocked": {
+              "const": "unresolved"
+            },
+            "checksUnavailable": {
+              "const": "unresolved",
+              "description": "Requirement 'required' with no usable result. Never downgrades to unavailable-and-proceed."
+            },
+            "closureNotAuthorised": {
+              "const": "unresolved",
+              "description": "Every condition met, but evidence is review-only and autoClose demands verified."
+            }
+          }
+        },
+        "autoClose": {
+          "type": "object",
+          "required": [
+            "minimumVerification"
+          ],
+          "additionalProperties": false,
+          "description": "Authority to close, which is separate from evidence. review-only describes what is known; it does not by itself authorise an automatic close.",
+          "properties": {
+            "minimumVerification": {
+              "enum": [
+                "verified",
+                "review-only"
+              ],
+              "default": "verified",
+              "description": "verified (default): auto-close requires a passed check bound to the closing fingerprint. review-only: auto-close is permitted on agreement alone \u2014 an explicit, deliberate opt-in, never a fallback the engine chooses."
+            }
+          }
+        }
+      }
+    },
+    "tactic": {
+      "enum": [
+        "analysis",
+        "triage",
+        "implementation",
+        "plan-and-implement",
+        "staging",
+        "deployment",
+        "prompt"
+      ]
+    }
+  },
+  "$defs": {
+    "contextRef": {
+      "type": "string",
+      "pattern": "^(window|reports|issue|project|playbook|acceptanceCriteria|decisions|findings\\.outstanding|findings\\.plan|plan\\.current|plan\\.approved|revision\\.current|revision\\.diff|checks\\.latest|steps\\.[a-z0-9-]+\\.(response|output(\\.[A-Za-z0-9_]+)*))$",
+      "description": "Named reference into run state. findings.plan is the substantial findings raised while the plan was under review, which an implementation reviewer must give a disposition for. plan.current is the latest plan the author produced (revisions included); plan.approved is the plan the approving audit examined, null until a plan review approves. steps.plan.response is only the first draft. {{previous.response}} is deliberately not expressible: a review usually needs the issue, the approved plan, the latest implementation response and the outstanding findings, which must be named individually."
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "id",
+        "role"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Also the step folder slug. Slugs repeat across rounds; the number disambiguates."
+        },
+        "role": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Template file under prompts/, relative to the strategy directory. Mutually exclusive with promptFrom."
+        },
+        "promptFrom": {
+          "$ref": "#/$defs/contextRef",
+          "description": "Use a prompt authored at runtime by another participant, e.g. steps.handoff-plan.output.prompt."
+        },
+        "context": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/contextRef"
+          }
+        },
+        "output": {
+          "type": "string",
+          "enum": [
+            "triageResult",
+            "handoff",
+            "authorArtifact",
+            "documentArtifact",
+            "reviewResult",
+            "closureConfirmation",
+            "investigationResult",
+            "releaseAssessment",
+            "reportDisposition",
+            "triageDisposition",
+            "triageBrief",
+            "singleSeatResult"
+          ],
+          "description": "Which agent-output contract this turn must satisfy."
+        },
+        "when": {
+          "type": "string",
+          "description": "Declarative guard, e.g. review.substantial."
+        },
+        "recordsRevision": {
+          "type": "boolean",
+          "default": false,
+          "description": "After this turn the engine fingerprints the workspace and binds the result to the step."
+        },
+        "access": {
+          "type": "string",
+          "enum": [
+            "none",
+            "read",
+            "checks"
+          ],
+          "default": "none",
+          "description": "Phase 1 of the seat-access fence (harness/README.md \"Seat hygiene\"): `read` lets a coordination-only turn read the run's source snapshot and run read-only commands inside the seat fence; `checks` lets it read the run's own check logs and evidence (not the source) the same way. Both stay tool-free when the fence cannot be proved or is off."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "prompt"
+          ]
+        },
+        {
+          "required": [
+            "promptFrom"
+          ]
+        }
+      ]
+    },
+    "phase": {
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "step": {
+          "$ref": "#/$defs/step"
+        },
+        "loop": {
+          "type": "object",
+          "required": [
+            "maxRounds",
+            "until",
+            "onExhausted",
+            "steps"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "maxRounds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "until": {
+              "type": "string",
+              "description": "Exit condition, e.g. review.verdict == approved && !review.substantial."
+            },
+            "onExhausted": {
+              "enum": [
+                "unresolved",
+                "await-input",
+                "extend-if-converging"
+              ],
+              "description": "unresolved: round exhaustion blocks the run. await-input: the run pauses and the operator may answer `continue` (exactly one more round) or `stop`. extend-if-converging: no question; one extra round is granted when the last round left fewer substantial findings (a failed check counts as one) than the round before it, otherwise the run ends as unresolved."
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/step"
+              }
+            },
+            "consensus": {
+              "type": "boolean"
+            }
+          }
+        },
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "when",
+              "to"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "when": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string",
+                "description": "A phase id, 'abort', 'ask-owner' (end the run after this step, unresolved, recording the triage output's autonomy questions or split for the issue owner; answering starts a fresh run), or 'await-input' (pause the run with `question` for the operator; the answer becomes `decisions` context and the run continues)."
+              },
+              "question": {
+                "type": "string",
+                "description": "For to: await-input. May render {{output.<field>}} from the step's structured output."
+              },
+              "outcome": {
+                "enum": [
+                  "unresolved",
+                  "resolved"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "step"
+          ]
+        },
+        {
+          "required": [
+            "loop"
+          ]
+        }
+      ]
+    }
+  }
+}

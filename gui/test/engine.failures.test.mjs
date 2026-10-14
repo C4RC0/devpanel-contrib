@@ -1,0 +1,210 @@
+import os from 'node:os'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createQuotaFallback } from '../server/runtime/model-fallback.mjs'
+import { classifyFailure, backoffMs, parseRetryAfter, createAvailabilityStore } from '../server/runtime/failure.mjs'
+import { ProcessError } from '../server/runtime/process.mjs'
+import { startRun, releaseWorkspace } from '../server/runtime/launch.mjs'
+import { engineFixture, scriptFor, cleanupFixtures } from './fakes/fixture.mjs'
+import { manualClock } from '../server/runtime/clock.mjs'
+
+const NL = String.fromCharCode(10)
+
+export default async (t) => {
+  t.section('1. runtime failures are classified from the runtime\'s own words')
+  {
+    const c = (message, detail = {}) => classifyFailure(new ProcessError(message, { kind: 'runtime-error', ...detail }))
+    t.eq('a 429 is a rate limit', c('claude exited 1', { stderr: 'API Error: 429 Too Many Requests' }).class, 'rate-limit')
+    t.eq('and retryable', c('claude exited 1', { stderr: 'rate limit reached' }).retryable, true)
+    t.eq('a quota exhaustion is a quota', c('codex exited 1', { stderr: 'You have hit your usage limit. Resets at 2026-09-14T00:00:00Z' }).class, 'quota')
+    t.eq('and not retryable within the run', c('codex exited 1', { stderr: 'insufficient_quota' }).retryable, false)
+    t.eq('a credential failure is auth', c('claude exited 1', { stderr: 'Error: 401 unauthorized' }).class, 'auth')
+    t.eq('a broken sandbox is environment', c('claude exited 1', { stderr: 'Error: sandbox required but unavailable: bubblewrap (bwrap) not installed' }).class, 'environment')
+    t.eq('an unknown CLI flag is environment', c('codex exited 2', { stderr: "error: unexpected argument '--sandbox' found" }).class, 'environment')
+    t.eq('a spawn error is environment', classifyFailure(Object.assign(new Error('spawn claude ENOENT'), { kind: 'spawn-error', started: false })).class, 'environment')
+    t.eq('a 503 is transient', c('claude exited 1', { stderr: '503 Service Unavailable' }).class, 'transient')
+    t.eq('anything else is runtime', c('claude exited 1', { stderr: 'something odd happened' }).class, 'runtime')
+    t.eq('quota beats rate-limit when both words appear', c('x', { stderr: 'usage limit reached; rate limit' }).class, 'quota')
+    t.ok('the evidence is kept', c('claude exited 1', { stderr: 'API Error: 429' }).evidence.includes('429'))
+    const expired = 'authentication_failed: Failed to authenticate: OAuth session expired and could not be refreshed'
+    t.eq('an expired OAuth session is auth, not runtime', c('claude exited 1', { stdout: expired }).class, 'auth')
+    t.eq('with the credential file unchanged, still auth', c('claude exited 1', { stdout: expired, credentials: { changed: false, how: null } }).class, 'auth')
+    const rotated = c('claude exited 1', { stdout: expired, credentials: { changed: true, how: 'replaced' } })
+    t.eq('replaced under the turn, transient and retried once, at once', `${rotated.class}:${rotated.retryable}:${rotated.maxRetries}:${rotated.retryAfterMs}`, 'transient:true:1:0')
+    t.eq('with the change on the classification', rotated.credentials?.how, 'replaced')
+    t.eq('a removed file is a change too: transient', c('claude exited 1', { stdout: expired, credentials: { changed: true, how: 'removed' } }).class, 'transient')
+  }
+
+  t.section('2. retry-after is honoured, else exponential backoff with a cap')
+  {
+    t.eq('seconds', parseRetryAfter('retry-after: 45'), 45_000)
+    t.eq('minutes', parseRetryAfter('please try again in 2 minutes'), 120_000)
+    t.eq('an absolute reset', parseRetryAfter('resets at 2026-09-13T00:10:00Z', Date.parse('2026-09-13T00:00:00Z')), 600_000)
+    t.eq('nothing when nothing is said', parseRetryAfter('nope'), null)
+    t.eq('first attempt waits the base', backoffMs(1, { baseMs: 30_000 }), 30_000)
+    t.eq('third attempt waits four times the base', backoffMs(3, { baseMs: 30_000 }), 120_000)
+    t.eq('never beyond the cap', backoffMs(10, { baseMs: 30_000, maxMs: 600_000 }), 600_000)
+    t.eq('the provider\'s own retry-after wins', backoffMs(1, { baseMs: 30_000, retryAfterMs: 5_000 }), 5_000)
+  }
+
+  t.section('3. the availability store remembers exhaustion, honestly marked')
+  {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpanel-avail-'))
+    const clock = manualClock()
+    const s = createAvailabilityStore(path.join(dir, 'a.json'), { clock, defaultHoldMs: 60_000 })
+    t.eq('unknown models are available', await s.check('opus-5'), null)
+    const rec = await s.recordExhausted({ modelId: 'opus-5', reason: 'usage limit', runId: 'r1' })
+    t.eq('an unparsed reset is an assumed hold', rec.assumed, true)
+    t.ok('with the default hold', Date.parse(rec.exhaustedUntil) === clock.now() + 60_000)
+    t.ok('checked as exhausted', (await s.check('opus-5'))?.runId === 'r1')
+    const exact = await s.recordExhausted({ modelId: 'opus-5', reason: 'resets later', retryAfterMs: 30 * 60_000 })
+    t.eq('a provider-stated reset supersedes the assumption', exact.assumed, false)
+    clock.advance(31 * 60_000)
+    t.eq('and expires on its own', await s.check('opus-5'), null)
+    await s.recordExhausted({ modelId: 'gpt', reason: 'x' })
+    t.eq('active lists what is still cooling', (await s.active()).map((r) => r.modelId).join(), 'gpt')
+    t.eq('clear removes a record', await s.clear('gpt'), true)
+    t.eq('and reports when there was none', await s.clear('gpt'), false)
+    await fs.writeFile(path.join(dir, 'a.json'), '{not json')
+    let threw = null
+    try { await s.check('gpt') } catch (error) { threw = error }
+    t.ok('a corrupt store fails closed rather than meaning "available"', threw?.status === 503, threw?.message)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+
+  t.section('4. a rate-limited turn is retried after a wait, and the run goes on')
+  {
+    const f = await engineFixture()
+    let calls = 0
+    const invoke = async (args) => {
+      if (args.meta.stepId === 'implement' && calls++ < 2) throw new ProcessError('claude exited 1', { kind: 'runtime-error', code: 1, stderr: 'API Error: 429 rate_limit_error retry-after: 7', invocationId: args.meta.invocationId })
+      return f.fake.invoke(args)
+    }
+    const engine = await startRun({
+      playbookId: f.playbookId, issue: { project: 'devpanel-project', id: f.issue.id },
+      issuePath: f.issuePath, projectPath: f.projectPath, harnesses: { fake: { ...f.fake, invoke } }, stepStore: f.stepStore,
+      workspaceProvider: f.workspaceProvider, configRoot: f.configRoot, probe: f.probe, clock: f.clock, deliveryProvider: f.delivery
+    })
+    // The engine waits on the injected clock's sleep, which the manual clock
+    // satisfies instantly by advancing time: no real waiting, no ticking.
+    const before = f.clock.now()
+    const run = await engine.drive()
+    t.eq('the two waits advanced the clock by exactly the provider\'s retry-after', f.clock.now() - before, 14_000)
+    t.eq('the run completed', run.status, 'completed', run.blockedReason)
+    t.eq('two retries were recorded', run.failures.filter((x) => x.retried).length, 2)
+    t.eq('classified', run.failures[0].class, 'rate-limit')
+    t.eq('honouring the provider\'s retry-after', run.failures[0].retryInMs, 7_000)
+    t.eq('the second wait honours it too', run.failures[1].retryInMs, 7_000)
+    t.eq('nothing ended the run', run.failure, null)
+    t.ok('the implement step was recorded once', run.steps.filter((s) => s.stepId === 'implement').length === 1)
+    t.ok('no participant was left pending', Object.values(run.participants).every((p) => !p.pendingInvocation))
+    await releaseWorkspace(engine)
+  }
+
+  t.section('5. retries are bounded; the run fails with the classification on record')
+  {
+    const f = await engineFixture()
+    const invoke = async (args) => {
+      if (args.meta.stepId === 'implement') throw new ProcessError('claude exited 1', { kind: 'runtime-error', code: 1, stderr: '503 service unavailable', invocationId: args.meta.invocationId })
+      return f.fake.invoke(args)
+    }
+    const engine = await startRun({
+      playbookId: f.playbookId, issue: { project: 'devpanel-project', id: f.issue.id },
+      issuePath: f.issuePath, projectPath: f.projectPath, harnesses: { fake: { ...f.fake, invoke } }, stepStore: f.stepStore,
+      workspaceProvider: f.workspaceProvider, configRoot: f.configRoot, probe: f.probe, clock: f.clock, deliveryProvider: f.delivery
+    })
+    const before = f.clock.now()
+    let thrown = null
+    try { await engine.drive() } catch (error) { thrown = error }
+    t.eq('the waits doubled: 30s, 60s, 120s', f.clock.now() - before, 210_000)
+    t.ok('drive threw the runtime error, as before', thrown?.kind === 'runtime-error', thrown?.message)
+    t.eq('three retries, then the fourth failure ended it', engine.run.failures.length, 4)
+    t.eq('with the class on the run', engine.run.failure?.class, 'transient')
+    t.eq('and the retry count', engine.run.failure?.retries, 3)
+    await releaseWorkspace(engine)
+  }
+
+  t.section('6. a quota failure is not retried and is remembered for every other start')
+  {
+    const f = await engineFixture()
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpanel-avail-'))
+    const availability = createAvailabilityStore(path.join(dir, 'a.json'), { clock: f.clock })
+    const invoke = async (args) => {
+      if (args.meta.stepId === 'implement') throw new ProcessError('claude exited 1', { kind: 'runtime-error', code: 1, stderr: 'You have hit your weekly limit. Resets at 2026-09-12T00:00:00Z', invocationId: args.meta.invocationId })
+      return f.fake.invoke(args)
+    }
+    const engine = await startRun({
+      playbookId: f.playbookId, issue: { project: 'devpanel-project', id: f.issue.id },
+      issuePath: f.issuePath, projectPath: f.projectPath, harnesses: { fake: { ...f.fake, invoke } }, stepStore: f.stepStore,
+      workspaceProvider: f.workspaceProvider, configRoot: f.configRoot, probe: f.probe, clock: f.clock, deliveryProvider: f.delivery
+    })
+    engine.availability = availability
+    let thrown = null
+    try { await engine.drive() } catch (error) { thrown = error }
+    t.ok('the run failed at once', thrown?.kind === 'runtime-error')
+    t.eq('no retry', engine.run.failures.length, 1)
+    t.eq('classified as quota', engine.run.failure?.class, 'quota')
+    const model = engine.snapshot.participants.implementer.model.id
+    const cooling = await availability.check(model)
+    t.ok('the implementer model is recorded as exhausted', Boolean(cooling), JSON.stringify(cooling))
+    t.eq('by this run', cooling?.runId, engine.runId)
+    t.eq('with the provider\'s reset instant honoured', cooling?.assumed, false)
+    t.ok('on the run record too', engine.run.failure?.availability?.modelId === model)
+    await releaseWorkspace(engine)
+    await fs.rm(dir, { recursive: true, force: true })
+  }
+
+  t.section('7. reported dollar spending never stops a healthy run')
+  {
+    const f = await engineFixture()
+    const invoke = async (args) => {
+      const r = await f.fake.invoke(args)
+      return { ...r, usage: { tokens: 10, costUsd: 4 } }
+    }
+    const engine = await startRun({
+      playbookId: f.playbookId, issue: { project: 'devpanel-project', id: f.issue.id },
+      issuePath: f.issuePath, projectPath: f.projectPath, harnesses: { fake: { ...f.fake, invoke } }, stepStore: f.stepStore,
+      workspaceProvider: f.workspaceProvider, configRoot: f.configRoot, probe: f.probe, clock: f.clock, deliveryProvider: f.delivery
+    })
+    // The limit travels with the snapshot's budgets in a real run; set on the
+    // run record here, which is exactly where budgetExceeded reads it.
+    engine.run.budgets.limits = { ...engine.run.budgets.limits, maxCostUsd: 10 }
+    const run = await engine.drive()
+    t.eq('the run completes past the dollar allowance', run.status, 'completed')
+    t.ok('spending remains recorded', run.budgets.used.costUsd > 10)
+    await releaseWorkspace(engine)
+  }
+
+  t.section('8. a quota-exhausted seat continues with a new model and a fresh session')
+  {
+    const f = await engineFixture()
+    const seen = []
+    let failed = false
+    const invoke = async args => {
+      seen.push({ model: args.model, session: args.session, step: args.meta.stepId })
+      if (args.meta.stepId === 'implement' && !failed) {
+        failed = true
+        throw new ProcessError('quota exhausted', { kind: 'runtime-error', code: 1, stderr: 'insufficient_quota', invocationId: args.meta.invocationId })
+      }
+      return f.fake.invoke(args)
+    }
+    const engine = await startRun({ ...f, deliveryProvider: f.delivery, harnesses: { fake: { ...f.fake, invoke } } })
+    const original = engine.snapshot.participants.implementer.model.id
+    engine.quotaFallback = createQuotaFallback({
+      loadModels: async () => [{ id: 'replacement', model: 'replacement-wire', harness: 'fake', verification: { status: 'verified' }, efforts: ['high'], defaultEffort: 'high' }],
+      availability: { check: async () => null }, probeFor: () => f.probe, root: f.configRoot
+    })
+    await engine.drive()
+    t.eq('same run completes', engine.run.status, 'completed')
+    t.eq('original snapshot remains immutable', engine.snapshot.participants.implementer.model.id, original)
+    t.eq('substitution recorded', engine.run.modelSubstitutions[0].to, 'replacement')
+    t.eq('replacement has a fresh native session', seen.find(x => x.model === 'replacement-wire').session, null)
+    t.eq('failed step completed once', engine.run.steps.filter(s => s.stepId === 'implement').length, 1)
+    t.eq('quota evidence retained', engine.run.failures[0].class, 'quota')
+    t.eq('override persists across load', JSON.parse(await fs.readFile(path.join(f.issuePath, 'runs', engine.runId, 'run.json'))).modelOverrides.implementer.model.id, 'replacement')
+    await releaseWorkspace(engine)
+  }
+
+  await cleanupFixtures()
+  void NL
+}

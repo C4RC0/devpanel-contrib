@@ -1,0 +1,25 @@
+id: refactoring
+version: 2
+title: Refactoring
+description: Redesign and simplify code while preserving functionality, compatibility and operational behavior.
+strategy: plan-and-implement
+strategyVersion: 1
+intent: refactoring
+participants:
+  coordinator:
+    model: opus-5-5
+    effort: medium
+  planner:
+    model: opus-5-5
+    effort: medium   # Opus 5.5 medium by default since 2026-09-26; high/xhigh selectable per run
+  auditor-1:
+    model: gpt-6.1-sol
+    effort: medium   # GPT-6.1 Sol medium is the default auditor since 2026-10-01 (GPT-6 Sol before)
+autoClose:
+  minimumVerification: review-only
+  justification: The occupied auditor reviews the plan and exact candidate for behavior preservation. Checks and remaining evidence limitations are recorded honestly.
+budgets:
+  maxSteps: 60
+  wallClockMinutes: 120
+delivery:
+  action: apply-to-source

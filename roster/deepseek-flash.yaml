@@ -1,0 +1,19 @@
+id: deepseek-flash
+title: DeepSeek V4.1 Flash (via Claude Code)
+harness: claude
+profile: deepseek
+model: deepseek-flash
+efforts: ~
+defaultEffort: ~
+contextWindow: 1000000
+credentialRef: file:~/.config/deepseek/key
+endpointRef: file:providers/deepseek.endpoint
+verification:
+  status: verified
+  verifiedAt: ~
+  method: "Live Claude Code: file write, native session resume, tool-free supervisor recall"
+notes: >
+  deepseek-flash serves V4.1 Flash per DeepSeek's release notes.
+  Model identifier confirmed by the provider's model-list endpoint. Uses DeepSeek's
+  Anthropic-compatible API with Claude Code session/scratch support. Provider billing
+  and effort controls remain unmeasured/unverified.

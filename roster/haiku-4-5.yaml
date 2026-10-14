@@ -1,0 +1,15 @@
+id: haiku-4-5
+title: Claude Haiku 4.5
+harness: claude
+model: claude-haiku-4-5
+efforts: []
+defaultEffort: ~
+contextWindow: 200000
+verification:
+  status: verified
+  verifiedAt: ~
+  method: ~
+notes: >
+  efforts is [] as a VERIFIED fact, not an unknown: this model rejects an effort
+  setting outright. Naming one in a playbook is a hard error with no fix except
+  removing it.

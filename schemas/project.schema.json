@@ -1,0 +1,666 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/project.schema.json",
+  "title": "Project",
+  "description": "Where a project's authoritative source lives and where approved candidates integrate. A declaration names BOTH the source repository and the integration branch; without a declaration nothing is integrated, because the only alternative is a guess. A candidate is committed into the repository that owns its worktree; integration is refused when that is not the declared source repository, because the mapping between the two is a project decision no engine may guess.",
+  "type": "object",
+  "required": [
+    "id"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+$"
+    },
+    "sourceRepository": {
+      "type": "string",
+      "description": "Absolute path of the authoritative git repository. Defaults to the project checkout.",
+      "minLength": 1
+    },
+    "integrationBranch": {
+      "type": "string",
+      "description": "Branch approved candidates merge into. Defaults to the checkout's current branch.",
+      "minLength": 1
+    },
+    "notes": {
+      "type": "string"
+    },
+    "workspace": {
+      "$ref": "https://devpanel/schemas/playbook.schema.json#/properties/workspace",
+      "description": "Workspace policy for this project's runs. `tooling.mounts` and `tooling.commands` are set only here: host directories (the project's node_modules, a browser, a formatter install) bind-mounted read-only into every seat fence at worktree-relative targets, and the commands seats run with them through the offline wrapper. A mount source that does not exist refuses this project's seat turns naming it; targets never enter the snapshot, fingerprint or patch. See docs/project-infrastructure.md \"Seat tooling: mounts and commands\". `reconcile` is also set only here: per-path policy for `reconcile-delivery` (path or glob -> `append` | `prepend`, e.g. `@boilerplate/documentation/changelog.txt: prepend` for a newest-first changelog); a merge conflict on a declared path keeps the source's content and adds the candidate's added lines after it (`append`) or before it (`prepend`), every other conflict refuses. Read when the action runs and recorded on the attempt; see docs/execution-contract.md \"Reconciling a delivery with drifted source\"."
+    },
+    "infrastructure": {
+      "$ref": "#/$defs/infrastructure"
+    },
+    "actions": {
+      "type": "array",
+      "description": "Operator scripts that act on the live project checkout, run on this host from the project root. A project with a push.sh always has a built-in `push` action (bash ./push.sh); declaring an action with id `push` replaces it. What runs is this configuration, never text supplied by a model or a browser.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "run"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hint": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A bash command line, run with the project root as working directory."
+          },
+          "effect": {
+            "enum": [
+              "commit-checkout"
+            ],
+            "description": "What this action does to the checkout, declared rather than inferred. Only `commit-checkout` is defined: the action commits the checkout and does nothing else that an agent asked to resolve an uncommitted checkout would not expect. An action with no declared effect is never treated as one an agent may run on its own reasoning, whatever it is called — a script named push may version, push to a remote, restart a service or deploy. A script can declare the same thing with a `# DEVPANEL effect: commit-checkout` header (or another marker word the host settings name in projectActions.headerMarkers)."
+          },
+          "timeoutSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7200
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "path"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "windowLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxInputFiles": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maxInputBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 104857600
+        },
+        "maxInputFileBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 26214400
+        },
+        "maxPromptChars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200000
+        }
+      }
+    }
+  },
+  "dependentRequired": {
+    "sourceRepository": [
+      "integrationBranch"
+    ],
+    "integrationBranch": [
+      "sourceRepository"
+    ]
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "ssh",
+        "projectRoot",
+        "files"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "description": {
+          "type": "string"
+        },
+        "ssh": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/ssh"
+        },
+        "projectRoot": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_@./-]+$"
+        },
+        "files": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^/[A-Za-z0-9_@./-]+$"
+          }
+        },
+        "statusCommand": {
+          "type": "string",
+          "minLength": 1
+        },
+        "notes": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "uriRef",
+            "databases"
+          ],
+          "description": "Brokered read access (Phase 3): seats query this environment's MongoDB through the panel's db_query tool, never directly. Staging is granted to the project by declaring it; a production environment additionally needs an operator grant on the issue. The principal must be read-only (MongoDB `read` role on the named databases); provisioning it is operator work.",
+          "properties": {
+            "uriRef": {
+              "type": "string",
+              "pattern": "^(env|file):",
+              "description": "Reference to the connection URI of a read-only user, resolved on the panel host, outside every fence; never the URI itself."
+            },
+            "databases": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                  },
+                  "collections": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Granted collections; [\"*\"] or absent means every collection of this database."
+                  }
+                }
+              }
+            },
+            "caps": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "timeMs": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 120000
+                },
+                "documents": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5000
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 16777216
+                }
+              }
+            },
+            "redact": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Display only: fields shown masked in the panel. Not a confidentiality boundary (decision 1)."
+            }
+          }
+        }
+      }
+    },
+    "infrastructure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "orientation",
+        "staging",
+        "deployments",
+        "testDrive"
+      ],
+      "properties": {
+        "kind": {
+          "const": "boilerplate"
+        },
+        "orientation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "staging": {
+          "$ref": "#/$defs/environment"
+        },
+        "stagingDeployment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "workdir",
+            "commands",
+            "notes"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "workdir": {
+              "type": "string",
+              "pattern": "^/"
+            },
+            "commands": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+            },
+            "diagnostics": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "deployments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/environment"
+          }
+        },
+        "testDrive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "commands"
+          ],
+          "properties": {
+            "requirement": {
+              "enum": [
+                "required",
+                "optional"
+              ],
+              "default": "required"
+            },
+            "commands": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+            },
+            "finallyCommands": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+            },
+            "notes": {
+              "type": "string"
+            },
+            "confinement": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/confinement"
+            },
+            "compareBaseline": {
+              "type": "boolean",
+              "default": false,
+              "description": "Run the same commands on the run's base commit eagerly, once per run, concurrently with the first candidate check, and give reviewers a per-command line diff of stdout (base vs candidate). Without it the base is still captured, after the first failed candidate check, to tell inherited (baseline-known) failures from new ones. Doubles the first check's load on the target; off by default."
+            },
+            "timing": {
+              "enum": [
+                "every-revision",
+                "approved"
+              ],
+              "description": "When the staging test drive runs. approved (default): only on a revision every reviewer approved. every-revision: each new revision, beside its reviews. With tiers, the smoke tier runs on every revision and the full drive on the approved one; every-revision is refused."
+            },
+            "retryFailed": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3,
+              "default": 1,
+              "description": "How many times a failed check runs again on the same revision before the failure counts. Every attempt is recorded; a pass after a failure is marked flaky."
+            },
+            "tiers": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/tiers"
+            },
+            "baselineCache": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "environment"
+              ],
+              "properties": {
+                "stagingFiles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9-]+$"
+                  },
+                  "description": "Names in infrastructure.staging.files whose content hashes are part of the key: the application snapshot identity (for example deployment-scope, framework-version). An unknown name is a configuration error."
+                },
+                "environment": {
+                  "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/baselineCache/properties/environment"
+                },
+                "maxEntries": {
+                  "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/baselineCache/properties/maxEntries"
+                },
+                "maxAgeDays": {
+                  "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/baselineCache/properties/maxAgeDays"
+                }
+              },
+              "description": "Reuse the base drive (compareBaseline, or the base captured after a failure) across runs, under issues/<project>/.baselines/. Valid only on an exact match of: base commit, the tier target definition hash, the named staging files' content hashes and the environment command's output hash. A hit is copied into the run and recorded as baselineChecks[].reused."
+            }
+          }
+        },
+        "release": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "targets"
+          ],
+          "properties": {
+            "targets": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z0-9-]+$"
+              },
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "workdir",
+                  "ownership",
+                  "rollback",
+                  "commands"
+                ],
+                "properties": {
+                  "workdir": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "ownership": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "rollback": {
+                    "enum": [
+                      "automatic",
+                      "manual"
+                    ]
+                  },
+                  "commands": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "inspect",
+                      "checkpoint",
+                      "verifyCheckpoint",
+                      "apply",
+                      "verifyRelease",
+                      "restart",
+                      "observe",
+                      "test",
+                      "restore",
+                      "verifyRestore"
+                    ],
+                    "properties": {
+                      "inspect": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "checkpoint": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "verifyCheckpoint": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "apply": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "verifyRelease": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "restart": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "observe": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "test": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "restore": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      },
+                      "verifyRestore": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "run",
+                          "timeoutSeconds"
+                        ],
+                        "properties": {
+                          "run": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 3600
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "sourceRepository",
+        "integrationBranch"
+      ]
+    },
+    {
+      "required": [
+        "infrastructure"
+      ]
+    },
+    {
+      "required": [
+        "workspace"
+      ]
+    },
+    {
+      "required": [
+        "actions"
+      ]
+    }
+  ]
+}

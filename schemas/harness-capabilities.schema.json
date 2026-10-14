@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/harness-capabilities.schema.json",
+  "title": "Harness capabilities",
+  "description": "What probe() reports about a runtime adapter. The engine validates a playbook against this before a run starts, so unsupported settings fail at load time rather than mid-run.",
+  "type": "object",
+  "required": [
+    "id",
+    "installation",
+    "capabilities",
+    "depth",
+    "connection"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "capabilities": {
+      "type": "object",
+      "required": [
+        "sessionAssignment",
+        "resume",
+        "effort",
+        "structuredOutput",
+        "cancellation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "sessionAssignment": {
+          "enum": [
+            "preassign",
+            "discover"
+          ],
+          "description": "preassign: the engine chooses the session id up front (claude --session-id), so a crashed invocation is reconcilable by id. discover: the id only exists after the first invocation returns, so recovery needs invocation-marker evidence and may end in recovery-required."
+        },
+        "resume": {
+          "type": "boolean",
+          "description": "Can continue an existing session across separate process invocations."
+        },
+        "effort": {
+          "type": "boolean"
+        },
+        "structuredOutput": {
+          "type": "boolean",
+          "description": "Can be constrained to a JSON schema. When false the engine falls back to fenced-JSON extraction plus protocol repair."
+        },
+        "cancellation": {
+          "type": "boolean"
+        },
+        "instructions": {
+          "type": "boolean",
+          "description": "Accepts a separate system/instruction channel distinct from the turn prompt."
+        }
+      },
+      "description": "Declared by the adapter. Verified against the runtime only at the deeper probe levels."
+    },
+    "diagnostics": {
+      "type": "object",
+      "description": "Free-form; surfaced in the GUI when available is false.",
+      "additionalProperties": true
+    },
+    "installation": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Depth 1. An installed binary proves ONLY that a binary exists.",
+      "properties": {
+        "status": {
+          "enum": [
+            "installed",
+            "missing",
+            "error"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "authentication": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "Depth 2. Whether the runtime has usable credentials. 'unknown' is the honest answer when it was not probed — never assume ok.",
+      "properties": {
+        "status": {
+          "enum": [
+            "ok",
+            "missing",
+            "invalid",
+            "unknown",
+            "error"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "modelAccess": {
+      "type": "object",
+      "description": "Depth 3, keyed by wire model id. Authentication succeeding does not imply access to a particular model.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "denied",
+              "not-found",
+              "unknown",
+              "error"
+            ]
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "probedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "depth": {
+      "enum": [
+        "installation",
+        "authentication",
+        "model"
+      ],
+      "description": "How deep this probe went. A shallower probe leaves the deeper fields 'unknown'."
+    },
+    "connection": {
+      "type": "object",
+      "required": [
+        "profile"
+      ],
+      "additionalProperties": false,
+      "description": "Echoes the connection the probe was asked about, so a caller can confirm the result belongs to THAT provider configuration. Required: without it, a result cannot be tied to the request, and one provider's authentication could vouch for another's.",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "endpointRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credentialRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applied": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "What was actually applied to the launched process, as opposed to what was requested."
+        },
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Which person's login this probe ran under, echoed back so one account cannot vouch for another."
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "What the deep probe spent. A probe at depth 2 or 3 costs a call, so its spend must be visible to whatever is budgeting."
+    },
+    "invocations": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How many calls the probe ATTEMPTED, including failures — a failed call may still have cost something."
+    }
+  }
+}

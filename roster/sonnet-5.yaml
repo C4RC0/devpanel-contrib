@@ -1,0 +1,17 @@
+id: sonnet-5
+title: Claude Sonnet 5
+harness: claude
+model: claude-sonnet-5
+efforts: ~
+defaultEffort: ~
+contextWindow: ~
+verification:
+  status: verified
+  verifiedAt: ~
+  method: "Live fresh and resumed turns through the Claude adapter, no effort
+    override; model access ok, pre-assigned session resumed by the same id and
+    recalled the first turn."
+notes: >
+  Access and session continuity are verified at the runtime default effort.
+  Effort levels and context window are not yet established; omit an effort
+  override. Supervisor suitability requires separate evaluation.

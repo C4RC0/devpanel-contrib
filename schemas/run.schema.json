@@ -1,0 +1,1261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://devpanel/schemas/run.schema.json",
+  "title": "Run",
+  "description": "Durable execution record for one playbook run, at runs/<run-id>/run.json. Written before any socket event is emitted, so a reconnecting client reconstructs progress from storage rather than from the event stream.",
+  "type": "object",
+  "required": [
+    "runId",
+    "issue",
+    "playbook",
+    "status",
+    "participants",
+    "steps"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "runId": {
+      "type": "string"
+    },
+    "issue": {
+      "type": "object",
+      "required": [
+        "project",
+        "id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openedOn": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Absolute issue directory, so prompts can name the folder a participant is told to read."
+        }
+      }
+    },
+    "playbook": {
+      "type": "object",
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
+        "strategy": {
+          "type": "string"
+        },
+        "strategyVersion": {
+          "type": "integer"
+        },
+        "intent": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The intent the run was started with, for lists and diagnostics; the full overlay is in the snapshot."
+        }
+      },
+      "description": "Identity only. The full resolved configuration is snapshotted to resolved-playbook.json at run start and is what the engine actually reads."
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "running",
+        "paused",
+        "blocked",
+        "failed",
+        "cancelled",
+        "completed"
+      ],
+      "description": "Run status, distinct from issue status. An issue stays open while a run is paused, blocked, failed or cancelled."
+    },
+    "outcome": {
+      "enum": [
+        "resolved",
+        "unresolved",
+        null
+      ],
+      "default": null
+    },
+    "blockedReason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Set whenever status is blocked \u2014 protocol-repair-exhausted, recovery-required, workspace-unavailable, checks-unavailable-but-required, closure-not-authorised."
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "endedAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "isolation": {
+          "enum": [
+            "git-worktree",
+            "none",
+            "in-place"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "baseCommit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Explicit base commit the worktree was created from."
+        },
+        "state": {
+          "enum": [
+            "active",
+            "pending",
+            "reconcile-required",
+            "removed",
+            "retained"
+          ]
+        },
+        "scratchPath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Run-owned scratch directory under runs/<run-id>/scratch, outside the worktree. Offered to every participant for temporary files so nothing is written into the live project tree."
+        },
+        "retainedReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "How the base commit was chosen.",
+          "properties": {
+            "policy": {
+              "enum": [
+                "head",
+                "working-tree",
+                "commit",
+                "staged-release",
+                "in-place"
+              ]
+            },
+            "ref": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "headCommit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "snapshotRef": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "For working-tree: the ref under refs/devpanel/base/ that keeps the snapshot commit reachable."
+            },
+            "dirtyPaths": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Tracked paths modified in the checkout at provisioning."
+            },
+            "untrackedPaths": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "releaseId": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            }
+          }
+        },
+        "symlinks": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "policy": {
+              "enum": [
+                "reject",
+                "materialize",
+                "allow"
+              ]
+            },
+            "escaping": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "materialized": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Symlinks in the checkout that pointed outside the worktree, and what the policy did with them."
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "completed": {
+              "enum": [
+                "delete",
+                "retain"
+              ]
+            },
+            "unsuccessful": {
+              "const": "retain"
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "repository",
+            "head",
+            "branch",
+            "index"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string"
+            },
+            "head": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "index": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "participants": {
+      "type": "object",
+      "description": "One logical participant per strategy role, created at run initialisation. The native session is established on that participant's first turn.",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "role",
+          "model",
+          "harness",
+          "state"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sessionAssignment": {
+            "enum": [
+              "preassign",
+              "discover"
+            ]
+          },
+          "session": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Opaque descriptor persisted verbatim; its shape differs per harness. null until the first turn establishes it.",
+            "additionalProperties": true
+          },
+          "state": {
+            "enum": [
+              "uninitialised",
+              "ready",
+              "invoking",
+              "recovery-required",
+              "abandoned"
+            ]
+          },
+          "pendingInvocation": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "required": [
+              "invocationId",
+              "startedAt",
+              "marker"
+            ],
+            "description": "Written BEFORE launching, so a crash mid-invocation is always detectable. On restart this must be reconciled before any retry: the invocation may already have modified the workspace.",
+            "properties": {
+              "invocationId": {
+                "type": "string"
+              },
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "marker": {
+                "type": "string",
+                "description": "Embedded in the turn so a discovered session can be tied back to THIS invocation. 'most recent session' is not acceptable evidence \u2014 a concurrent run's session could be more recent."
+              },
+              "stepNumber": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "activity": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "description": "What the runtime has been observed doing during this invocation. Liveness evidence only: recent activity proves the process is alive, never that the answer is near.",
+                "properties": {
+                  "pid": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "events": {
+                    "type": "integer"
+                  },
+                  "lastAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lastKind": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lastDetail": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "integrityBefore": {
+                "type": "string"
+              }
+            }
+          },
+          "turns": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stepId": {
+          "type": "string"
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "description": "Maps each step folder to the run that produced it. Steps stay flat at the issue root and numbering continues across runs, so this mapping is the only way to tell which run, participant, phase and attempt a step belongs to.",
+      "items": {
+        "type": "object",
+        "required": [
+          "number",
+          "slug",
+          "role",
+          "phase",
+          "round",
+          "attempt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "number": {
+            "type": "string",
+            "pattern": "^[0-9]{3}$"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Protocol-repair attempts of the same logical turn."
+          },
+          "invocationId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Fingerprint of the candidate as of this step, when the step records one."
+          },
+          "outputRef": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Path under runs/<run-id>/ holding the structured output. Never inside the step folder \u2014 a step contains only response.md."
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "decision": {
+            "type": "object",
+            "description": "An operator's answer (role operator): the question asked, the closed options if any, the answer, who gave it and when.",
+            "additionalProperties": true
+          },
+          "reportFile": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "revisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "byStep",
+          "at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "fingerprint": {
+            "type": "string"
+          },
+          "byStep": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detailRef": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "description": "An approval names the fingerprint it examined. Any later revision leaves it stale \u2014 it is never carried forward.",
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "revision",
+          "step",
+          "at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "checkResults": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "revision",
+          "result",
+          "at"
+        ],
+        "properties": {
+          "revision": {
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "failed",
+              "not-run",
+              "unavailable"
+            ]
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durationMs": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "materialization": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "exitCode": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "signal": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "timedOut": {
+                  "type": "boolean"
+                },
+                "durationMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "log": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "passed": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "description": "One entry per revision checked. Evidence: which commands ran, in what, with what exit status, and where their logs are."
+    },
+    "outstandingFindings": {
+      "type": "array",
+      "description": "Substantial findings from the latest review of the current revision. Recomputed per review rather than accumulated, so a withdrawn finding disappears.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "used": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "delivery": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "none",
+            "worktree-diff",
+            "commit",
+            "merge",
+            "in-place",
+            "apply-to-source"
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "description": "The fingerprint re-derived immediately before delivering."
+        },
+        "revalidated": {
+          "type": "boolean"
+        },
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "artifactRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reconstruction": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "description": "Result of rebuilding the candidate from the base commit plus the artifact. Delivery is complete only when the rebuilt fingerprint equals the delivered revision.",
+          "properties": {
+            "verified": {
+              "type": "boolean"
+            },
+            "fingerprint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected": {
+              "type": "string"
+            },
+            "detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For commit delivery: the git repository (common dir) the candidate was committed into."
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "in-place: the live checkout that is the candidate."
+        },
+        "changedPaths": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "in-place: the paths the fingerprint records as changed against the baseline."
+        },
+        "application": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Destination verification for apply-to-source delivery. Missing or false verified never satisfies closure.",
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "type": "string"
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "fingerprint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "patchHash": {
+              "type": "string"
+            },
+            "startedAt": {
+              "type": "string"
+            },
+            "completedAt": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "closure": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "revision": {
+          "type": "string"
+        },
+        "verificationLevel": {
+          "enum": [
+            "verified",
+            "review-only"
+          ],
+          "description": "verified: checks ran and passed on this exact fingerprint. review-only: checks were unavailable, so agreement rests on reading alone. Recorded explicitly \u2014 never presented as verified."
+        },
+        "conditions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "authorised": {
+          "type": "boolean",
+          "description": "Whether autoClose.minimumVerification permits closing on this evidence. Every other condition can hold while this is false."
+        },
+        "residualRisks": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "From the coordinator's closure confirmation: what remains unfixed or was accepted as-is."
+        },
+        "followUps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "riskIndex",
+              "issueId"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "riskIndex": {
+                "type": "integer"
+              },
+              "issueId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "createdAt": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Follow-up issues opened for unaccepted residual risks, by the risk's index in residualRisks. Deduplicated."
+        },
+        "independentAudit": {
+          "type": "boolean"
+        },
+        "windowId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detectedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "resolution": {
+          "enum": [
+            "abandoned"
+          ]
+        },
+        "resolvedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "integration": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Operator-approved integration of a committed candidate into the project's integration branch. Bound to the delivered revision and to the target branch head at approval.",
+      "properties": {
+        "approvedBy": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "targetBranch": {
+          "type": "string"
+        },
+        "targetHeadBefore": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mergeCommit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "method": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "at": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "phase": {
+          "enum": [
+            "publishing",
+            "published",
+            "complete",
+            "aborted"
+          ],
+          "description": "publishing: intent persisted, ref not yet swapped; published: ref swapped, checkouts pending; complete; aborted: nothing published."
+        },
+        "worktrees": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "warning": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reconciledAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "clear",
+            "quarantined",
+            "abandoned"
+          ]
+        },
+        "checkpoint": {
+          "type": "string"
+        },
+        "latest": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "dispositions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "gitDirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "supervisorLaunchId": {
+      "type": "string",
+      "description": "Durable correlation to the top-level supervisor launch reservation; assigned before preflight or agent invocation."
+    },
+    "journal": {
+      "type": "object",
+      "description": "Observed event journal completeness and durable recovery finding; never execution authority for a readable prefix.",
+      "additionalProperties": true
+    },
+    "failures": {
+      "type": "array",
+      "description": "Every runtime failure, classified (rate-limit, quota, auth, environment, transient, runtime), with whether it was retried and the evidence it was read from.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "failure": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "The classified failure that ended the run, when a runtime failure did.",
+      "additionalProperties": true
+    },
+    "pause": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Set while status is paused: id identifies this question occurrence; answers must supply it as pauseId. Also records the question and which step asked.",
+      "additionalProperties": true
+    },
+    "currentWindow": {
+      "type": "object"
+    },
+    "hostGuidance": {
+      "type": "object",
+      "description": "The installation's notes frozen into evidence/host-guidance/ at run start (runtime/host-guidance.mjs): dir, files, bytes, skipped."
+    },
+    "windowResetAfter": {
+      "type": [
+        "integer",
+        "string"
+      ]
+    },
+    "coordinatorEffects": {
+      "type": "object"
+    },
+    "operatorRequests": {
+      "type": "object",
+      "description": "Operator requests the coordinator raised, keyed by the step number that raised one. Present so a request is asked exactly once, across a crash and a replay."
+    },
+    "reportDisposition": {
+      "type": "object"
+    },
+    "release": {
+      "type": "object"
+    },
+    "priorDispositions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "abandonment": {
+      "type": "object",
+      "description": "Explicit operator abandonment. Original recovery and pending invocation records remain here; no interrupted outcome is claimed successful.",
+      "required": [
+        "at",
+        "by",
+        "previousStatus"
+      ],
+      "properties": {
+        "at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "by": {
+          "const": "operator"
+        },
+        "previousStatus": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "artifactApplication": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Destination verification for apply-to-source delivery. Missing or false verified never satisfies closure.",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "patchHash": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "completedAt": {
+          "type": "string"
+        }
+      }
+    },
+    "modelOverrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "modelSubstitutions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "modelFallbackChecks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "inputRetrySuspendedMs": {
+      "type": "number",
+      "minimum": 0
+    },
+    "checkRefresh": {
+      "type": "object"
+    },
+    "checkRefreshHistory": {
+      "type": "array"
+    },
+    "supersededSteps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "checkRefreshSuspendedMs": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

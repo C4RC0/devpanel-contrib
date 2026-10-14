@@ -1,0 +1,36 @@
+id: hardening
+title: Security hardening
+description: >
+  Reducing vulnerabilities and strengthening security controls: input validation, authorisation, secrets handling, exposure, safe defaults.
+covers:
+  - security-hardening
+guidance:
+  triage: |
+    State the threat concretely: who can do what, from where, with what
+    consequence. Confirm the exposure exists in the code. Criteria: the specific
+    path is closed, the default is safe without configuration, and no other path
+    to the same effect was left open. If closing it needs an operator decision
+    (breaking a permissive default), name that decision.
+  handoff-plan: |
+    Ask for the attack path, the control that closes it, why that control is at
+    the right layer, and what remains exposed after the change.
+  plan: |
+    Describe the threat, the control, and the layer it belongs at. Prefer
+    deny-by-default over opt-in restriction; if the plan keeps a permissive default
+    for compatibility, say so explicitly as a residual exposure. List adjacent
+    paths checked.
+  audit-plan: |
+    Think as the attacker: can the control be bypassed, is it before or after the
+    trust boundary, does a permissive default remain. A plan that adds warnings
+    where it could deny is a finding.
+  implement: |
+    Implement the control at the boundary. Never log or echo secrets. Do not widen
+    anything else while here.
+  audit-implementation: |
+    Trace the attack path through the new code. Check the failure mode when the
+    control errors (fail closed?), that inputs are validated before use, and that
+    secrets are not exposed in logs, errors or artifacts.
+  confirm: |
+    Name what the change closes and, above all, what it does not — any exposure
+    that persists until an operator configures something is residual risk with
+    accepted: false unless the operator already decided otherwise.

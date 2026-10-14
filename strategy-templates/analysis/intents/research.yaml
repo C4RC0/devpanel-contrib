@@ -1,0 +1,27 @@
+id: research
+title: Technical research
+description: >
+  Investigating approaches, libraries, tools or technical constraints, and reporting what was found with evidence.
+covers:
+  - technical-research
+guidance:
+  triage: |
+    Turn the request into the questions the research must answer and the
+    constraints (runtime, licence, existing dependencies) any answer must respect.
+    Criteria: each question answered with cited evidence; options compared on the
+    same axes; a recommendation with its trade-offs, or an honest statement that
+    the evidence does not decide.
+  handoff-draft: |
+    Ask for the questions in order, the options considered, the evidence per
+    option, and a recommendation that names what would change it.
+  draft: |
+    Answer each question. Compare options on the same axes with the evidence for
+    each. Distinguish what you verified from what you read. End with a
+    recommendation and what would change it; put decisions the operator must make
+    in openQuestions.
+  audit-draft: |
+    Check claims against the project and the sources; a claim without evidence is
+    a finding. Check the comparison is fair — the same axes for every option.
+  confirm: |
+    Record what was verified versus reported, and every question left to the
+    operator.

@@ -1,0 +1,24 @@
+id: changelog
+title: Changelog
+description: >
+  Summarising changes for a release or milestone from the recorded history, accurately and for the intended audience.
+covers:
+  - changelog-writing
+  - release-notes
+guidance:
+  triage: |
+    Establish the range (commits, tags, dates) and the audience. Criteria: every
+    entry traces to a change in the range; user-facing effects are described as
+    such; breaking changes are marked; nothing in the range is silently omitted.
+  handoff-draft: |
+    Ask for entries grouped by kind, each traceable to its change, with breaking
+    changes first.
+  draft: |
+    Read the history in the range. Write entries for the audience, grouped
+    (breaking, added, changed, fixed, removed), each with its source commit or
+    issue. Omit internal churn only by saying so.
+  audit-draft: |
+    Check entries against the history: invented, missing or mis-described
+    changes are findings.
+  confirm: |
+    Confirm coverage of the range; anything deliberately omitted is recorded.

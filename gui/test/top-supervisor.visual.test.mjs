@@ -1,0 +1,81 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import YAML from 'yaml'
+import { startStage } from './browser/stage.mjs'
+import { launchChromium, browserRequired } from './browser/chromium.mjs'
+export default async function(t){
+ const chrome=await launchChromium()
+ if(!chrome.ok){if(browserRequired)t.ok('Chromium available',false,chrome.reason);else t.skip('Supervisor controls in Chromium',chrome.reason);return}
+ const stage=await startStage()
+ const modelFile=path.join(stage.configRoot,'roster/opus-5.yaml')
+ const model=YAML.parse(await fs.readFile(modelFile,'utf8'));model.harness='claude';model.verification.status='verified';await fs.writeFile(modelFile,YAML.stringify(model))
+ const unverifiedFile=path.join(stage.configRoot,'roster/gpt-5.6-luna.yaml')
+ const unverified=YAML.parse(await fs.readFile(unverifiedFile,'utf8'));unverified.harness='codex';unverified.verification.status='unverified';await fs.writeFile(unverifiedFile,YAML.stringify(unverified))
+ await fs.writeFile(path.join(stage.harnessDir,'claude.mjs'),`export async function invoke(args){return {session:args.session??{id:'visual-session'},response:JSON.stringify({message:'I received: '+JSON.parse(args.prompt).event.text,action:null}),usage:{costUsd:null}}}`)
+ const context=await chrome.browser.newContext({viewport:{width:1280,height:900}})
+ const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message))
+ try{
+ await page.goto(stage.origin);await page.evaluate(token=>sessionStorage.setItem('devpanel.token',token),stage.token)
+ await page.goto(stage.origin+'/supervisor')
+ // A focus, not a scope: picking one orders the supervisor's attention and is
+ // never required, because every project stays visible either way.
+ await page.locator('.v-select').filter({hasText:'Focus (optional)'}).click()
+ await page.getByRole('option').first().click()
+ await page.keyboard.press('Escape')
+ await page.getByLabel('What should the supervisor work on?').fill('Coordinate the issue queue')
+ await page.locator('.v-select').filter({hasText:'Model'}).click()
+ await page.getByRole('option',{name:'GPT-5.6 Luna (unverified)',exact:true}).click()
+ await page.getByText('Runtime access has not been verified. Verify this roster entry before starting.',{exact:true}).waitFor()
+ t.ok('unverified GPT is visible and explains readiness',true)
+ t.eq('unverified selection disables Start',await page.getByRole('button',{name:'Start supervisor',exact:true}).isDisabled(),true)
+ const refused=await stage.request('/api/supervisor/start',{method:'POST',body:JSON.stringify({model:'gpt-5.6-luna',projects:[stage.project],message:'Coordinate'})})
+ t.eq('direct start also refuses an unverified model',refused.status,400)
+ t.eq('refusal invokes no model',(await stage.request('/api/supervisor')).body.calls,0)
+ await page.locator('.v-select').filter({hasText:'Model'}).click()
+ await page.getByRole('option',{name:'Claude Opus 5',exact:true}).click()
+ await page.getByRole('button',{name:'Start supervisor',exact:true}).click()
+ await page.getByText('I received: Coordinate the issue queue',{exact:true}).waitFor()
+ t.ok('Start form launches supervisor',true)
+ await page.getByLabel('Message the supervisor').fill('What is next?')
+ await page.getByRole('button',{name:'Instruct',exact:true}).click()
+ await page.getByText('I received: What is next?',{exact:true}).waitFor()
+ t.ok('chat receives a response',true)
+ await page.reload()
+ await page.getByText('I received: What is next?',{exact:true}).waitFor()
+ t.ok('reload reconstructs the conversation',true)
+ const headerY=await page.locator('.status-header').evaluate(el=>el.getBoundingClientRect().top)
+ const sendMessage=async text=>{await stage.request('/api/supervisor/messages',{method:'POST',body:JSON.stringify({text})});await page.getByText('I received: '+text,{exact:true}).waitFor()}
+ await sendMessage('A long update '+('more context '.repeat(250)))
+ await page.waitForFunction(()=>{const el=document.querySelector('.chat-scroll');return el.scrollHeight-el.scrollTop-el.clientHeight<5})
+ t.ok('new replies automatically scroll within chat',true)
+ t.eq('status header remains fixed',await page.locator('.status-header').evaluate(el=>el.getBoundingClientRect().top),headerY)
+ t.eq('chat has no per-message format toolbar',await page.locator('.conversation .markdown-controls').count(),0)
+ t.ok('raw responses are collapsed',await page.locator('.technical:not([open])').count()>=3)
+ t.eq('raw JSON is not visible',await page.locator('.technical pre').first().isVisible(),false)
+ await page.locator('.chat-scroll').evaluate(el=>{el.scrollTop=0;el.dispatchEvent(new Event('scroll'))})
+ await sendMessage('New reply while reading earlier messages')
+ t.eq('reading position is preserved',await page.locator('.chat-scroll').evaluate(el=>el.scrollTop),0)
+ await page.getByRole('button',{name:'Jump to latest'}).click()
+ await page.waitForFunction(()=>{const el=document.querySelector('.chat-scroll');return el.scrollHeight-el.scrollTop-el.clientHeight<5})
+ t.ok('jump to latest restores following',true)
+ await page.reload()
+ await page.waitForFunction(()=>{const el=document.querySelector('.chat-scroll');return el && el.scrollHeight>el.clientHeight && el.scrollHeight-el.scrollTop-el.clientHeight<5})
+ t.ok('reload opens at latest message',true)
+
+ await page.screenshot({path:'/tmp/devpanel-supervisor-chat-desktop.png'})
+ await page.setViewportSize({width:390,height:844})
+ // Let Vuetify's responsive drawer transition finish before measuring layout.
+ await page.waitForTimeout(350)
+ const dimensions=await page.evaluate(()=>({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth}))
+ t.ok('mobile view fits',dimensions.scroll<=dimensions.width+1,JSON.stringify(dimensions))
+ t.ok('mobile composer stays in viewport',await page.locator('.composer').evaluate(el=>el.getBoundingClientRect().bottom<=window.innerHeight+1))
+ if(await page.getByRole('button',{name:'Jump to latest'}).isVisible())await page.getByRole('button',{name:'Jump to latest'}).click()
+ await page.screenshot({path:'/tmp/devpanel-supervisor-chat-phone.png'})
+ await page.getByRole('button',{name:'Stop supervisor',exact:true}).click()
+ await page.getByRole('button',{name:'Continue',exact:true}).click()
+ await page.getByRole('heading',{name:'Continue supervisor',exact:true}).waitFor()
+ t.ok('Stop returns to resumable session',true)
+ t.eq('no browser exceptions',errors,[])
+ await page.screenshot({path:'/tmp/devpanel-supervisor-phone.png',fullPage:true})
+ }finally{await context.close();await stage.stop()}
+}

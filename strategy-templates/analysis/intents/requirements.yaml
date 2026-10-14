@@ -1,0 +1,25 @@
+id: requirements
+title: Requirements
+description: >
+  Turning a request into clear requirements and acceptance criteria that a later change can be built and reviewed against.
+covers:
+  - requirements-analysis
+guidance:
+  triage: |
+    Identify the underlying need behind the request and who is affected.
+    Criteria: every requirement is testable, numbered and traceable to the
+    request; assumptions and exclusions are explicit; conflicts are surfaced, not
+    resolved silently.
+  handoff-draft: |
+    Ask for numbered requirements with acceptance criteria each, explicit
+    non-goals, assumptions, and the open decisions.
+  draft: |
+    Write numbered requirements, each with the condition that proves it met.
+    Separate must from should. State what is out of scope and why. Do not design
+    the solution. Put every decision the operator owns in openQuestions.
+  audit-draft: |
+    A requirement that cannot be checked is a finding. So is a hidden design
+    decision, and a requirement the request does not support.
+  confirm: |
+    Confirm every requirement traces to the request and is checkable; list open
+    decisions as residual risk.

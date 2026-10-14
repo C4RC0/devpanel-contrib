@@ -1,0 +1,31 @@
+id: tests
+title: Tests
+description: >
+  Adding, updating or repairing automated tests: unit, integration, end-to-end, fixtures and flaky-test repair.
+covers:
+  - test-maintenance
+  - regression-testing
+guidance:
+  triage: |
+    Establish what behaviour the tests must cover or what makes the existing test
+    wrong or flaky. Criteria: the named behaviour is exercised, the test fails
+    when that behaviour is broken, and it does not depend on timing or environment
+    it cannot control.
+  handoff-plan: |
+    Ask for the behaviours to cover, how each test would fail on a regression, and
+    for flaky tests the actual cause of nondeterminism.
+  plan: |
+    List each test and the behaviour it pins. For a flaky test, name the cause;
+    retrying is not a fix. Say what cannot be tested here and why.
+  audit-plan: |
+    A test that passes regardless of the behaviour is a finding. So is a repair
+    that hides nondeterminism instead of removing it.
+  implement: |
+    Write tests that assert behaviour, not implementation details. Keep fixtures
+    minimal and explicit. Do not change production code except to make it
+    testable, and say so.
+  audit-implementation: |
+    For each test ask: what breaks it? If nothing plausible, it is not a test.
+    Check for hidden ordering, shared state and sleeps.
+  confirm: |
+    State which behaviours are now pinned and which remain untested.

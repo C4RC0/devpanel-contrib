@@ -1,0 +1,18 @@
+id: opus-5-5
+title: Claude Opus 5.5
+harness: claude
+model: claude-opus-5-5
+efforts: [low, medium, high, xhigh, max]
+defaultEffort: high
+contextWindow: 1000000
+verification:
+  status: verified
+  verifiedAt: ~
+  method: "Live fresh and resumed turns through the Claude adapter, no effort
+    override; model access ok, pre-assigned session resumed by the same id and
+    recalled the first turn."
+notes: >
+  Access and session continuity are verified at the runtime default effort.
+  The effort levels and 1M context window are taken from the current model
+  table and were not exercised live. Supervisor suitability requires separate
+  evaluation.

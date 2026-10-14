@@ -1,0 +1,21 @@
+id: triage
+version: 3
+title: Triage
+description: Coordinate once, investigate the reported claim, and return the result directly.
+strategy: triage
+strategyVersion: 2
+participants:
+  coordinator:
+    model: opus-5-5
+    effort: medium
+  investigator:
+    model: opus-5-5
+    effort: medium
+autoClose:
+  minimumVerification: review-only
+  justification: Completing triage records a disposition; the issue stays open for implementation.
+budgets:
+  maxSteps: 4
+  wallClockMinutes: 5
+  maxTokens: 60000
+  maxCostUsd: 1

@@ -1,0 +1,20 @@
+id: gpt-6-astra
+title: GPT-6 Astra
+harness: codex
+model: gpt-6-astra
+efforts: [ low, medium, high, xhigh, max ]
+defaultEffort: ~
+contextWindow: ~
+verification:
+  status: verified
+  verifiedAt: ~
+  method: "Live fresh and resumed turns at each listed effort through the Codex
+    adapter; model, effort records and session continuity matched. The CLI
+    recorded the requested model and effort on both successful turns; backend
+    interpretation is not observed. Cost was not reported."
+notes: >-
+  Authentication and access to the exact wire model gpt-6-astra are verified.
+  Listed effort levels, access and session continuity are verified through the
+  default Codex connection. No panel default effort is imposed. Context window
+  remains unverified. Runtime preflight still checks current access; supervisor
+  suitability requires separate evaluation.

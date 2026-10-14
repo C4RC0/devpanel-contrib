@@ -1,0 +1,29 @@
+# TypeSafe Jev as an ADVISORY decision provider. See docs/decisions.md.
+#
+# Jev answers fixed-choice questions with probabilities. It never reads the
+# repository, never writes, and is never consulted for approvals, closure or
+# dispositions. Below the threshold, or when it is unavailable, the caller does
+# what it would have done without it.
+id: jev
+title: TypeSafe Jev (System One)
+endpoint: https://api.typesafe.ai/v1/systemone
+model: jev-latest
+credentialRef: file:~/.config/typesafe/key
+# Act only at or above this confidence. Tune it per question from shadow-mode data.
+threshold: 0.9
+timeoutMs: 10000
+# Bounded retries on 429/529/5xx and network errors, inside one ask. The wait
+# honours retry-after up to maxWaitMs; decisions are advisory and must not stall.
+retries: 2
+maxWaitMs: 5000
+# docs.typesafe.ai/models.md, 2026-09-19: $0.042 per million input tokens,
+# output tokens free. The ledger reserves maxCallCostUsd before each call and
+# settles what usage × price comes to.
+pricing:
+  inputUsdPerMillionTokens: 0.042
+  outputUsdPerMillionTokens: 0
+maxCallCostUsd: 0.01
+# The documented limit is 32k tokens for state plus the longest question. A
+# character cap is checked before sending, because a token count is not
+# available locally; roughly 4 characters per token.
+maxStateChars: 100000

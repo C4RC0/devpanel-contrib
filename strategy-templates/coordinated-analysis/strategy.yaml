@@ -1,0 +1,166 @@
+id: coordinated-analysis
+version: 1
+title: analysis
+description: Coordinated analysis with configurable occupied seats and durable evidence.
+roles:
+  coordinator:
+    description: Coordinates from supplied task, reports and engine evidence only;
+      delegates technical work.
+    invokesOthers: false
+  analyser:
+    description: Reads source, captured logs and the coordinator brief; reports
+      evidence and actionable findings.
+    writesCode: false
+    invokesOthers: false
+  analyser-2:
+    description: Independently investigates the shared evidence window.
+    optional: true
+    invokesOthers: false
+  analyser-3:
+    description: Independently investigates the shared evidence window.
+    optional: true
+    invokesOthers: false
+  analyser-4:
+    description: Independently investigates the shared evidence window.
+    optional: true
+    invokesOthers: false
+  analyser-5:
+    description: Independently investigates the shared evidence window.
+    optional: true
+    invokesOthers: false
+workspace:
+  isolation: git-worktree
+  requireCleanBase: true
+  onUnsupported: block
+  base: working-tree
+reviewPolicy:
+  substantial:
+    anyOf:
+      - blocking: true
+      - severity:
+          - critical
+          - major
+  protocolRepair:
+    maxAttempts: 2
+    onExhausted: block
+checks:
+  requirement: none
+  boundToRevision: true
+budgets:
+  maxSteps: 160
+  wallClockMinutes: 480
+  onExhausted: unresolved
+phases:
+  - id: brief
+    step:
+      id: brief
+      role: coordinator
+      prompt: brief.md
+      output: handoff
+      context: &a1
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+  - id: investigate-analyser
+    step:
+      id: investigate-analyser
+      role: analyser
+      prompt: investigate.md
+      output: investigationResult
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - steps.brief.output.prompt
+  - id: investigate-analyser-2
+    step:
+      id: investigate-analyser-2
+      role: analyser-2
+      prompt: investigate.md
+      output: investigationResult
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - steps.brief.output.prompt
+  - id: investigate-analyser-3
+    step:
+      id: investigate-analyser-3
+      role: analyser-3
+      prompt: investigate.md
+      output: investigationResult
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - steps.brief.output.prompt
+  - id: investigate-analyser-4
+    step:
+      id: investigate-analyser-4
+      role: analyser-4
+      prompt: investigate.md
+      output: investigationResult
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - steps.brief.output.prompt
+  - id: investigate-analyser-5
+    step:
+      id: investigate-analyser-5
+      role: analyser-5
+      prompt: investigate.md
+      output: investigationResult
+      context:
+        - issue
+        - project
+        - acceptanceCriteria
+        - window
+        - reports
+        - findings.outstanding
+        - decisions
+        - steps.brief.output.prompt
+  - id: disposition
+    step:
+      id: disposition
+      role: coordinator
+      prompt: disposition.md
+      output: reportDisposition
+      context: *a1
+completion:
+  requires:
+    - reportDispositionRecorded
+    - deliveryCompleted
+  autoClose:
+    minimumVerification: review-only
+  delivery:
+    action: none
+    revalidateBeforeDelivery: true
+  onFailure:
+    roundsExhausted: unresolved
+    disagreement: unresolved
+    budgetExhausted: unresolved
+    protocolBlocked: unresolved
+    checksUnavailable: unresolved
+    closureNotAuthorised: unresolved
+tactic: analysis
