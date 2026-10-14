@@ -10,6 +10,14 @@ config written by people is YAML, and state written by the machine is JSON, all 
 
 Repository: <https://github.com/LaKing/devpanel>
 
+![A project's issues, each with the state of its latest run](docs/images/issues.png)
+
+![Starting a playbook: seats, models and efforts, delivery and limits, previewed before anything is spent](docs/images/start-run.png)
+
+![An issue after a delivered run: the outcome, the steps and the patch](docs/images/issue-run.png)
+
+The screenshots come from an isolated demo instance (example projects, the test suite's fake runtime).
+
 ## How it works
 
 - **Issues** are directories: `issues/<project>/<date>-<slug>/`, with numbered step folders and a `runs/`
