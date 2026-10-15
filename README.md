@@ -208,7 +208,7 @@ started from, and is not updated, so the two differ.
 
 ## License
 
-Copyright © 2026 LaKing
+Copyright © 2026 LaKing@D250.hu
 
 devpanel is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
 License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any
@@ -216,3 +216,7 @@ later version. See [LICENSE](LICENSE).
 
 Much of the code was written with AI coding agents (Claude Code and Codex) under human direction and review;
 the providers' terms assign their output to the user, who publishes it under this licence.
+
+devpanel has been developed with devpanel: many of its features and fixes were filed as issues on its own
+project and carried out by its own playbooks (coordinator, author and auditors in isolated worktrees), then
+reviewed, tested and committed by its maintainer.
