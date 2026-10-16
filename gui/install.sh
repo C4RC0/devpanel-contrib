@@ -149,12 +149,15 @@ say "node ${NODE_VERSION}, npm $(npm --version), user $(id -un)"
 
 # --- dependencies ----------------------------------------------------------
 
+# The build (vite) and the test suites need the devDependencies. npm leaves
+# them out when NODE_ENV=production is set, as it often is on servers, and the
+# build then fails on a missing @vitejs/plugin-vue, so include them explicitly.
 if [[ -f package-lock.json ]]; then
   say "installing dependencies from package-lock.json"
-  npm ci --no-audit --no-fund
+  npm ci --include=dev --no-audit --no-fund
 else
   warn "no package-lock.json — resolving fresh"
-  npm install --no-audit --no-fund
+  npm install --include=dev --no-audit --no-fund
 fi
 
 # --- certificate -----------------------------------------------------------

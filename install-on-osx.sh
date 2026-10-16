@@ -130,7 +130,7 @@ cd "$DEST/gui"
 LOCK_SUM="$(shasum -a 256 package-lock.json | cut -d' ' -f1)"
 if [[ "$(cat node_modules/.devpanel-lock.sha256 2>/dev/null)" != "$LOCK_SUM" ]]; then
   say "dependencies"
-  npm ci --no-audit --no-fund
+  npm ci --include=dev --no-audit --no-fund  # NODE_ENV=production would drop the build tools
   echo "$LOCK_SUM" > node_modules/.devpanel-lock.sha256
 else
   say "dependencies unchanged"
