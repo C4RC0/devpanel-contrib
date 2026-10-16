@@ -20,7 +20,7 @@ import {
   workspaceUnchanged,
   worktreeDiffDelivery
 } from './runtime/launch.mjs'
-import { FINALIZABLE_BLOCKS } from './runtime/engine.mjs'
+import { FINALIZABLE_BLOCKS, HARNESS_LOAD_FAILURES, harnessUnavailable } from './runtime/engine.mjs'
 import { reconcileUnavailable } from './runtime/source-reconcile.mjs'
 import { LockHeld, ownerLiveness, withLock } from './runtime/lock.mjs'
 import { hostPlatform } from './runtime/platform.mjs'
@@ -165,9 +165,9 @@ export function createSupervisor ({
    * named here would look, to a roster entry that references it, exactly like
    * one that was never written.
    */
-  const loadFailures = new WeakMap()   // loadHarnesses() result → { id: import error }
   async function loadHarnesses () {
     const adapters = {}
+    Object.defineProperty(adapters, HARNESS_LOAD_FAILURES, { value: {} })   // not enumerable: callers list the adapters
     let files = []
     try {
       files = (await fs.readdir(harnessDir, { withFileTypes: true }))
@@ -184,7 +184,7 @@ export function createSupervisor ({
       // start. An adapter updated on disk that needs a newer export from those
       // therefore fails to import until the service restarts; the reason is kept
       // so the probe can name it instead of reporting a missing adapter.
-      try { adapters[id] = await import(`${path.join(harnessDir, file)}?t=${Date.now()}`) } catch (error) { loadFailures.set(adapters, { ...loadFailures.get(adapters), [id]: error }) }
+      try { adapters[id] = await import(`${path.join(harnessDir, file)}?t=${Date.now()}`) } catch (error) { adapters[HARNESS_LOAD_FAILURES][id] = error }
     }
     return adapters
   }
@@ -192,9 +192,7 @@ export function createSupervisor ({
   const probeFor = (harnesses) => createProbeExecutor({
     load: async (harnessId) => {
       const adapter = harnesses[harnessId]
-      const failure = loadFailures.get(harnesses)?.[harnessId]
-      if (!adapter && failure) throw new Error(`harness "${harnessId}" failed to load: ${failure.message} (an adapter changed on disk after the service started needs a restart: systemctl restart devpanel)`)
-      if (!adapter) throw new Error(`no adapter for harness "${harnessId}"`)
+      if (!adapter) throw new Error(harnessUnavailable(harnesses, harnessId) ?? `no adapter for harness "${harnessId}"`)
       return adapter
     },
     allowPaid: true,

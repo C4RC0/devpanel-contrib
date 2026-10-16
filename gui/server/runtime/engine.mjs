@@ -30,6 +30,17 @@ import { infrastructureBrief } from '../infrastructure.mjs'
 import { classifyFailure, backoffMs } from './failure.mjs'
 
 /** Blocks at the delivery stage: the reviews stand, only the hand-off failed. */
+/*
+ * Why an adapter is missing from a harness map loaded by the supervisor
+ * (supervisor.mjs loadHarnesses): the import error it kept under this symbol,
+ * or null when the adapter simply does not exist.
+ */
+export const HARNESS_LOAD_FAILURES = Symbol.for('devpanel.harnessLoadFailures')
+export function harnessUnavailable (harnesses, id) {
+  const failure = harnesses?.[HARNESS_LOAD_FAILURES]?.[id]
+  return failure ? `harness "${id}" failed to load: ${failure.message} (an adapter changed on disk after the service started needs a restart: systemctl restart devpanel)` : null
+}
+
 export const FINALIZABLE_BLOCKS = ['delivery-unverifiable', 'delivery-failed', 'delivery-unavailable', 'candidate-changed-during-delivery', 'source-delivery-blocked', 'source-delivery-interrupted']
 import { candidateDiff } from './diff.mjs'
 import { COORDINATOR_INSTRUCTIONS, TRIAGE_READ_INSTRUCTIONS, coordinationInput } from './coordination.mjs'
@@ -962,7 +973,7 @@ export class Engine {
       if (report.changes.entry) report.reason = 'the worktree\'s .git entry was replaced: its repository link is no longer the one provisioned (engine-git.mjs)'
       else if (report.changes.nested?.length) report.reason = `a repository was created inside the worktree (${report.changes.nested.slice(0, 3).join(', ')}): the host never resolves a repository the engine did not provision`
       else if (head || (!report.writesCode && (paths.length || index))) report.reason = 'role made unauthorized source or Git changes'
-      else if (changed && outcome !== 'completed' && acceptPartial && report.writesCode) report.partialAccepted = { reason: acceptPartial, paths: paths.map((c) => c.path), index }
+      else if (changed && outcome !== 'completed' && acceptPartial && report.writesCode && !report.reason) report.partialAccepted = { reason: acceptPartial, paths: paths.map((c) => c.path), index }
       else if (changed && outcome !== 'completed') report.reason = 'unsuccessful invocation left partial source or Git changes'
       report.status = report.reason ? 'quarantined' : 'clear'
     } catch (error) {
@@ -1149,7 +1160,7 @@ export class Engine {
       // workspace, so the only safe answer is to stop and ask a human.
       if (typeof adapter?.reconcile !== 'function') {
         if (!await this.endIntegrity(role, p.pendingInvocation, 'uncertain')) continue
-        await this.blockForRecovery(role, `${role}: harness "${p.harness}" cannot reconcile invocation ${p.pendingInvocation.invocationId}`)
+        await this.blockForRecovery(role, `${role}: ${harnessUnavailable(this.harnesses, p.harness) ?? `harness "${p.harness}" cannot reconcile`}; invocation ${p.pendingInvocation.invocationId} is unreconciled`)
         continue
       }
 
@@ -1659,6 +1670,8 @@ export class Engine {
     const role = step.role
     const p = this.run.participants[role]
     const adapter = this.harnesses[p.harness]
+    // Refused before any capture or pending record: no turn started, so there is nothing to recover.
+    if (!adapter) throw new ProcessError(harnessUnavailable(this.harnesses, p.harness) ?? `no adapter for harness "${p.harness}"`, { kind: 'environment-error', started: false })
     const delegatedTriage = this.snapshot.tactic === 'triage' && this.snapshot.completion.requires.includes('reportDispositionRecorded')
     const coordinationOnly = this.snapshot.participants[role].coordinationOnly === true || (delegatedTriage && role === 'coordinator' && step.output === 'triageBrief')
     const scratchDir = this.snapshot.tactic || coordinationOnly ? path.join(this.run.workspace.scratchPath, role) : this.run.workspace.scratchPath
@@ -2081,7 +2094,14 @@ export class Engine {
       // edits are its own interrupted work, so they are kept for that retry
       // instead of quarantined. Once per step and round: a second failure
       // quarantines as any other.
-      const rotated = error.name !== 'AbortError' && error?.credentials?.changed === true && classifyFailure(error, { now: this.clock.now() }).retryable &&
+      // Only when that retry will really run (the same conditions as
+      // handleRuntimeFailure's willRetry): accepted edits that are never
+      // retried would leave unreviewed work vouched for.
+      const cursorKey = `${step.id}#${round}#${attempt}`
+      const retryPolicy = { maxAttempts: 3, ...(this.snapshot.retryPolicy ?? {}) }
+      const priorRetries = (this.run.failures ?? []).filter((f) => f.cursorKey === cursorKey && f.retried).length
+      const rotation = error.name !== 'AbortError' && error?.credentials?.changed === true ? classifyFailure(error, { now: this.clock.now() }) : null
+      const rotated = Boolean(rotation?.retryable) && !lost && !this.cleanupHold() && priorRetries < Math.min(retryPolicy.maxAttempts, rotation.maxRetries ?? Infinity) &&
         !(this.run.failures ?? []).some((f) => f.partialAccepted && f.stepId === step.id && f.round === round)
       if (!await this.endIntegrity(role, pending, error.name === 'AbortError' ? 'cancelled' : 'failed', error.message, { acceptPartial: rotated ? 'credential-rotated' : null })) {
         this.invocationStoppedAt = this.clock.now()

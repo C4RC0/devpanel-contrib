@@ -183,7 +183,9 @@ const commands = {
 
 const args = process.argv.slice(2);
 let given = null;
-if (args[0] === '-p') [, given] = args.splice(0, 2);
+// -p is accepted anywhere: after the command it would otherwise be read as an issue id.
+const at = args.indexOf('-p');
+if (at >= 0) [, given] = args.splice(at, 2);
 const [command, ...rest] = args;
 if (!commands[command]) fail(USAGE);
 commands[command](projectOf(given), ...rest).catch((e) => fail(e.message));

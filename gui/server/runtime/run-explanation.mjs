@@ -415,7 +415,7 @@ function blocked (run, outputs, kept) {
     case 'owner-lost':
       // A source-integrity quarantine is a turn that ended with changes nobody
       // vouched for, not a restart; its cause is the turn's own failure.
-      if (run.integrity?.status === 'quarantined') {
+      if (run.integrity?.status === 'quarantined' && !run.journal?.recoveryRequired && run.integrity.latest?.changes?.changed) {
         const failed = run.recovery?.cause ? `${run.recovery.cause.class}: ${run.recovery.cause.message}` : null
         return { ...base, headline: 'Stopped: a turn left source changes that need a recovery decision', detail: failed ? `The turn failed (${failed}).` : null,
           cause: run.recovery?.reason ? firstLine(run.recovery.reason) : null,

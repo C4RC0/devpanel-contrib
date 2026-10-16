@@ -38,6 +38,22 @@ export default async (t) => {
     t.ok('not that the adapter is missing', !/no adapter for harness/.test(detail), detail)
   }
 
+  t.section('2. a resumed run whose adapter failed to load refuses the turn with that reason, before any capture')
+  {
+    const { startRun } = await import('../server/runtime/launch.mjs')
+    const { HARNESS_LOAD_FAILURES } = await import('../server/runtime/engine.mjs')
+    const f = await engineFixture({ playbook: 'implementation' })
+    const engine = await startRun({ ...f, issue: { project: 'devpanel-project', id: f.issue.id }, deliveryProvider: f.delivery })
+    const harnesses = {}
+    Object.defineProperty(harnesses, HARNESS_LOAD_FAILURES, { value: { fake: new Error('does not provide an export named exportAddedAfterStart') } })
+    engine.harnesses = harnesses
+    let thrown = null
+    try { await engine.drive() } catch (error) { thrown = error }
+    t.ok('the turn is refused naming the load failure', /harness "fake" failed to load: does not provide an export/.test(thrown?.message ?? ''), thrown?.message)
+    t.eq('as an environment fault that never started', `${thrown?.kind}:${thrown?.started}`, 'environment-error:false')
+    t.eq('and nothing was left pending', Object.values(engine.run.participants).filter((p) => p.pendingInvocation).length, 0)
+  }
+
   delete process.env.DEVPANEL_FAKE_CONTROL
   await fs.rm(path.dirname(sharedControl), { recursive: true, force: true })
   await cleanupFixtures()

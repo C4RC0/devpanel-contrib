@@ -168,7 +168,8 @@ export async function askCoordinator (engine, { text, actor, harnesses, emit = n
   const readScope = session === p.readSession
   const spec = engine.participantSpec(role)
   const adapter = harnesses?.[spec.model.harness]
-  if (!adapter) throw Object.assign(new Error(`the ${spec.model.harness} harness is not available`), { status: 503 })
+  const loadFailure = harnesses?.[Symbol.for('devpanel.harnessLoadFailures')]?.[spec.model.harness]   // engine.mjs harnessUnavailable
+  if (!adapter) throw Object.assign(new Error(`the ${spec.model.harness} harness is not available${loadFailure ? `: it failed to load (${loadFailure.message}); restart the service` : ''}`), { status: 503 })
 
   const at = new Date().toISOString()
   const entry = await appendChat(issuePath, runId, { id: `q-${crypto.randomUUID()}`, kind: 'question', at, actor: who, text: question, role, model: spec.model.id ?? null })

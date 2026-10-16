@@ -303,16 +303,17 @@ export default async function (t) {
   }
 
   t.section('an author whose turn failed on a rotated credential keeps its partial edits and is retried once')
-  for (const failures of [1, 2]) {
+  for (const failures of [1, 2, 'retry-used']) {
     const f = await engineFixture({ playbook: 'implementation' })
     const original = f.fake.invoke
     let failed = 0
     // What the claude adapter throws when another process replaced the shared
     // credential file during the turn (harness/claude.mjs credentialChange).
     f.fake.invoke = async (args) => {
-      if (args.meta.stepId === 'implement' && failed < failures) {
+      if (args.meta.stepId === 'implement' && failed < (failures === 'retry-used' ? 2 : failures)) {
         failed++
-        await fs.writeFile(path.join(args.cwd, 'source.txt'), `partial ${failed}`)
+        // 'retry-used': the first rotation leaves nothing and spends the one retry.
+        if (failures !== 'retry-used' || failed === 2) await fs.writeFile(path.join(args.cwd, 'source.txt'), `partial ${failed}`)
         throw Object.assign(new Error('claude exited 1\nauthentication_failed: Failed to authenticate: OAuth session expired and could not be refreshed'), { credentials: { changed: true, how: 'replaced' } })
       }
       return original(args)
@@ -322,6 +323,12 @@ export default async function (t) {
     try { await engine.drive() } catch (error) { thrown = error }
     const first = engine.run.failures[0]
     t.eq(`${failures}: the first failure is a retried transient`, `${first?.class}:${first?.retried}`, 'transient:true')
+    if (failures === 'retry-used') {
+      t.eq('edits after the one retry was spent are not accepted', engine.run.failures[1]?.partialAccepted ?? null, null)
+      t.eq('they quarantine instead', `${engine.run.integrity.status}:${engine.run.blockedReason}`, 'quarantined:recovery-required')
+      await releaseWorkspace(engine)
+      continue
+    }
     t.eq('its partial edits are kept for the retry, not quarantined', first?.partialAccepted?.reason, 'credential-rotated')
     t.eq('naming the kept paths', first?.partialAccepted?.paths, ['source.txt'])
     if (failures === 1) {
