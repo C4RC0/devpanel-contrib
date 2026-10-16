@@ -59,6 +59,11 @@ export default async function (t) {
   t.eq('with the recorded reason as the cause', cut.cause, 'CLI exited before recording the outcome')
   t.eq('a panel restart keeps its own wording', explainRun({ status: 'blocked', blockedReason: 'recovery-required', participants: { author: { pendingInvocation: {} } } }).headline,
     'Interrupted: the panel restarted while this run was working')
+  const quarantined = explainRun({ status: 'blocked', blockedReason: 'recovery-required', integrity: { status: 'quarantined' },
+    recovery: { required: true, reason: 'Source integrity: unsuccessful invocation left partial source or Git changes. Workspace retained at /x', cause: { class: 'transient', message: 'claude exited 1' } } })
+  t.eq('a source-integrity quarantine is not called a restart', quarantined.headline, 'Stopped: a turn left source changes that need a recovery decision')
+  t.eq('it names the turn\'s failure', quarantined.detail, 'The turn failed (transient: claude exited 1).')
+  t.ok('and the quarantine reason', /^Source integrity: unsuccessful invocation/.test(quarantined.cause), quarantined.cause)
 
   t.section('finished runs say what they achieved')
   t.eq('patch-only delivery leaves the project unchanged',

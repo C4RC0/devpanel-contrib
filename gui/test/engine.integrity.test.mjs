@@ -302,6 +302,39 @@ export default async function (t) {
     await releaseWorkspace(engine)
   }
 
+  t.section('an author whose turn failed on a rotated credential keeps its partial edits and is retried once')
+  for (const failures of [1, 2]) {
+    const f = await engineFixture({ playbook: 'implementation' })
+    const original = f.fake.invoke
+    let failed = 0
+    // What the claude adapter throws when another process replaced the shared
+    // credential file during the turn (harness/claude.mjs credentialChange).
+    f.fake.invoke = async (args) => {
+      if (args.meta.stepId === 'implement' && failed < failures) {
+        failed++
+        await fs.writeFile(path.join(args.cwd, 'source.txt'), `partial ${failed}`)
+        throw Object.assign(new Error('claude exited 1\nauthentication_failed: Failed to authenticate: OAuth session expired and could not be refreshed'), { credentials: { changed: true, how: 'replaced' } })
+      }
+      return original(args)
+    }
+    const engine = await start(f)
+    let thrown = null
+    try { await engine.drive() } catch (error) { thrown = error }
+    const first = engine.run.failures[0]
+    t.eq(`${failures}: the first failure is a retried transient`, `${first?.class}:${first?.retried}`, 'transient:true')
+    t.eq('its partial edits are kept for the retry, not quarantined', first?.partialAccepted?.reason, 'credential-rotated')
+    t.eq('naming the kept paths', first?.partialAccepted?.paths, ['source.txt'])
+    if (failures === 1) {
+      t.eq('the run went on without a person', `${engine.run.integrity.status}:${engine.run.outcome}:${thrown?.message ?? null}`, 'clear:resolved:null')
+      t.eq('and the retry started from the partial edits', await fs.readFile(path.join(engine.run.workspace.path, 'source.txt'), 'utf8'), 'partial 1')
+      t.ok('the acceptance is on the turn\'s integrity record', (await readEvents(engine.issuePath, engine.runId)).events.some((e) => e.type === 'turn-integrity' && e.partialAccepted?.reason === 'credential-rotated'))
+    } else {
+      t.eq('a second failure quarantines as any other', `${engine.run.integrity.status}:${engine.run.blockedReason}`, 'quarantined:recovery-required')
+      t.eq('and is not retried again', engine.run.failures.at(-1)?.retried, false)
+    }
+    await releaseWorkspace(engine)
+  }
+
   t.section('unauthorized work must be restored or abandoned, never accepted as partial author work')
   {
     const { engine } = await changedTurn({ change: (cwd) => fs.writeFile(path.join(cwd, 'source.txt'), 'bad') })

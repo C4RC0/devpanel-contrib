@@ -413,6 +413,14 @@ function blocked (run, outputs, kept) {
   switch (reason) {
     case 'recovery-required':
     case 'owner-lost':
+      // A source-integrity quarantine is a turn that ended with changes nobody
+      // vouched for, not a restart; its cause is the turn's own failure.
+      if (run.integrity?.status === 'quarantined') {
+        const failed = run.recovery?.cause ? `${run.recovery.cause.class}: ${run.recovery.cause.message}` : null
+        return { ...base, headline: 'Stopped: a turn left source changes that need a recovery decision', detail: failed ? `The turn failed (${failed}).` : null,
+          cause: run.recovery?.reason ? firstLine(run.recovery.reason) : null,
+          next: 'Inspect the retained workspace, then keep the partial edits, restore them, or abandon the run.' }
+      }
       return { ...base, headline: 'Interrupted: the panel restarted while this run was working', cause: run.recovery?.reason ? firstLine(run.recovery.reason) : null,
         next: 'Recover picks up where it stopped. Abandon keeps the work and lets you start fresh.' }
     case 'checks-failed-unchanged':

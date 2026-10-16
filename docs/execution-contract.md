@@ -1825,6 +1825,15 @@ run counted as suspended (`ownerRecoveries`). A quarantined run instead offers
 `resolve-integrity` (`GET/POST …/runs/:runId/integrity`): inspect the changes,
 then `accept-partial`, `restored` or `abandon`, pinned to the inspected state hash.
 
+One failure does not quarantine: a writing turn (no HEAD change, nothing
+unauthorized) that failed because another process replaced the shared credential
+file under it (`failure.credentials.changed`, retried once by `failure.mjs`). Its
+partial edits are its own interrupted work, so the engine keeps them as the
+retry's baseline, as an operator's `accept-partial` would, and records
+`partialAccepted: { reason: 'credential-rotated', paths, index }` on the turn's
+integrity report and on the failure. Once per step and round; a second failure
+there quarantines as any other.
+
 ### Integrity capture cost
 
 Tool-free coordination-only turns take no whole-tree capture; the next working

@@ -936,7 +936,7 @@ export class Engine {
     }
   }
 
-  async endIntegrity (role, pending, outcome, failure = null) {
+  async endIntegrity (role, pending, outcome, failure = null, { acceptPartial = null } = {}) {
     if (this.run.integrity?.status === 'quarantined') return false
     if (pending.integrity === 'not-applicable') return true
     const report = {
@@ -962,6 +962,7 @@ export class Engine {
       if (report.changes.entry) report.reason = 'the worktree\'s .git entry was replaced: its repository link is no longer the one provisioned (engine-git.mjs)'
       else if (report.changes.nested?.length) report.reason = `a repository was created inside the worktree (${report.changes.nested.slice(0, 3).join(', ')}): the host never resolves a repository the engine did not provision`
       else if (head || (!report.writesCode && (paths.length || index))) report.reason = 'role made unauthorized source or Git changes'
+      else if (changed && outcome !== 'completed' && acceptPartial && report.writesCode) report.partialAccepted = { reason: acceptPartial, paths: paths.map((c) => c.path), index }
       else if (changed && outcome !== 'completed') report.reason = 'unsuccessful invocation left partial source or Git changes'
       report.status = report.reason ? 'quarantined' : 'clear'
     } catch (error) {
@@ -2075,7 +2076,14 @@ export class Engine {
         : `invocation failed: ${error.message}`)
       await activityWrite
       await liveWrite
-      if (!await this.endIntegrity(role, pending, error.name === 'AbortError' ? 'cancelled' : 'failed', error.message)) {
+      // A writing turn that failed only because another process rotated the
+      // shared credential under it is retried once (failure.mjs); its partial
+      // edits are its own interrupted work, so they are kept for that retry
+      // instead of quarantined. Once per step and round: a second failure
+      // quarantines as any other.
+      const rotated = error.name !== 'AbortError' && error?.credentials?.changed === true && classifyFailure(error, { now: this.clock.now() }).retryable &&
+        !(this.run.failures ?? []).some((f) => f.partialAccepted && f.stepId === step.id && f.round === round)
+      if (!await this.endIntegrity(role, pending, error.name === 'AbortError' ? 'cancelled' : 'failed', error.message, { acceptPartial: rotated ? 'credential-rotated' : null })) {
         this.invocationStoppedAt = this.clock.now()
         if (error.name !== 'AbortError') await this.recordQuarantinedFailure({ error, role, step, round, attempt, pending })
         return { blocked: true }
@@ -2481,7 +2489,8 @@ export class Engine {
       ...(classified.credentials ? { credentials: classified.credentials } : {}),
       model: spec?.model?.id ?? null, retried: willRetry, retryInMs: null, availability: null,
       ...(reclassification ? { reclassification } : {}),
-      ...(cleanupBlocked ? { cleanupUnproved: true } : {})
+      ...(cleanupBlocked ? { cleanupUnproved: true } : {}),
+      ...(this.run.integrity?.latest?.invocationId === pending.invocationId && this.run.integrity.latest.partialAccepted ? { partialAccepted: this.run.integrity.latest.partialAccepted } : {})
     }
     if (classified.class === 'quota' && this.availability && spec?.model?.id) {
       try {
