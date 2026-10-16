@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -26,6 +27,11 @@ import { sshConnection, shellQuote } from './ssh.mjs'
  */
 
 const sha256 = (data) => crypto.createHash('sha256').update(data).digest('hex')
+/** A file's sha256, streamed; a directory or an unreadable file rejects. */
+const sha256File = (file) => new Promise((resolve, reject) => {
+  const hash = crypto.createHash('sha256')
+  createReadStream(file).on('error', reject).on('data', (chunk) => hash.update(chunk)).on('end', () => resolve(hash.digest('hex')))
+})
 const NL = String.fromCharCode(10)
 
 /** The target one tier drives: the smoke commands only, or the whole target. */
@@ -54,7 +60,18 @@ export async function baselineIdentity ({ target, targetKey, baseCommit, signal 
     ? runProcess({ command: connection.command, args: [...connection.args, `sh -c ${shellQuote(script)}`], signal })
     : runProcess({ command: '/bin/sh', args: ['-c', script], signal })
   const fileHashes = []
-  if (files.length) {
+  if (files.length && !remote) {
+    // Hashed here rather than by sha256sum, which macOS lacks: the same digest
+    // of the same bytes, for the same path strings in the same order (relative
+    // ones from this process's directory, where sh ran), so the key is unchanged.
+    for (const file of files) {
+      try {
+        fileHashes.push([file, await sha256File(path.resolve(file))])
+      } catch (error) {
+        return { error: `local file ${file} could not be read (${error.code ?? error.message}); the baseline cache is not used`, code: 'BASELINE_FILE_UNREADABLE', file }
+      }
+    }
+  } else if (files.length) {
     const out = await exec(`sha256sum -- ${files.map(shellQuote).join(' ')}`)
     if (out.code !== 0) return { error: `staging files could not be hashed: ${(out.stderr || out.stdout).trim().slice(0, 300)}` }
     const hashes = new Map(out.stdout.split(NL).filter(Boolean).map((l) => /^([0-9a-f]{64})\s+\*?(.+)$/.exec(l)).filter(Boolean).map((m) => [m[2], m[1]]))
@@ -170,7 +187,7 @@ export function baselineCacheFor ({ target, targetKey, baseCommit, issuePath, ru
     },
     async lookup (dirName) {
       const identity = await cache.identity()
-      if (identity.error) { cache.status = { state: 'unavailable', reason: identity.error }; return null }
+      if (identity.error) { cache.status = { state: 'unavailable', reason: identity.error, ...(identity.code ? { code: identity.code } : {}) }; return null }
       const hit = await adoptBaseline({ dir, identity, runDir, dirName })
       cache.status = hit ? { state: 'hit', key: identity.key } : { state: 'miss', key: identity.key }
       if (hit) cache.verified = identity.key

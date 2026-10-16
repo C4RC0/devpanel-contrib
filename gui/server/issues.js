@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import { runResult } from './runtime/run-result.mjs'
 import { explainRun } from './runtime/run-explanation.mjs'
 import { withLock } from './runtime/lock.mjs'
+import { unrecordedCleanup, unrecordedRefusal } from './runtime/cleanup-barrier.mjs'
 import { ARCHIVE_FILE, archiveState, requireUnarchived } from './issue-archive.mjs'
 import { bundleFiles, deletePacked, packIssue, packedRuns, packedSummaries, packedSummary, unpackIssue } from './issue-bundle.mjs'
 import { openedBy as openedByRecord, derivedOpenedBy } from './opened-by.mjs'
@@ -833,6 +834,7 @@ export async function setIssueArchived (project, id, archived, { overrideReason 
 export async function packArchived (project, id) {
   const dir = await issueDir(project, id)
   if (!await archiveState(dir)) throw new IssueError('Only an archived issue is packed.', 409)
+  await requireCleanupRecorded(dir, 'packing this issue')
   const issue = await readIssue(project, id)
   let released = null
   const summary = await packIssue({
@@ -842,6 +844,20 @@ export async function packArchived (project, id) {
   })
   if (released?.pruned) await git('git', ['-C', released.projectPath, 'worktree', 'prune']).catch(() => {})
   return summary
+}
+
+/*
+ * An in-place run's unproved cleanup outlives its run record only in the
+ * project barrier file (reconcile reads active issues alone). An open entry the
+ * file does not hold — its write failed — would be dropped by archiving,
+ * packing or deleting the issue, so each is refused instead.
+ */
+async function requireCleanupRecorded (dir, verb) {
+  for (const name of await fs.readdir(path.join(dir, 'runs')).catch(() => [])) {
+    if (name.startsWith('worktree-') || name.startsWith('workspace-')) continue
+    const run = await fs.readFile(path.join(dir, 'runs', name, 'run.json'), 'utf8').then(JSON.parse, () => null)
+    if ((await unrecordedCleanup(path.dirname(dir), run)).length) throw new IssueError(unrecordedRefusal(run, verb), 409)
+  }
 }
 
 async function markArchived (project, id, archived, { overrideReason = null } = {}) {
@@ -875,6 +891,7 @@ async function markArchived (project, id, archived, { overrideReason = null } = 
             throw new IssueError('Stop the active run and resolve any pending recovery before archiving this issue.', 409)
           }
         }
+        await requireCleanupRecorded(dir, 'archiving this issue')
         {
           const file = path.join(dir, ARCHIVE_FILE)
           await writeJson(file, { archivedAt: new Date().toISOString(), ...(archiveOverride ? { override: archiveOverride } : {}) })
@@ -948,6 +965,7 @@ export async function deleteIssue (project, id) {
   }
 
   return withLock(path.join(dir, '.run.lock'), { purpose: 'issue-delete', takeOverDead: false }, async () => {
+    await requireCleanupRecorded(dir, 'deleting this issue')
     const runIds = (await fs.readdir(path.join(dir,'runs')).catch(error=>{if(error.code==='ENOENT')return [];throw error})).filter(id=>!id.startsWith('worktree-')&&!id.startsWith('workspace-'))
     const released = await releaseWorktrees(dir, project)
     await fs.rm(dir, { recursive: true, force: true })

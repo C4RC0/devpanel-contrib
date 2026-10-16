@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { isProjectName, projectsRoot } from '../project-path.mjs'
 import { hostSettings } from '../config/host-settings.mjs'
+import { hostPlatform } from './platform.mjs'
 
 /*
  * Snapshot selection, v1 (fence.selection: 1; the seat-access fence's
@@ -83,8 +84,13 @@ export const PANEL_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pat
  * projects directory: `<prefix>.<anything>` for each of the host settings'
  * selection.forbiddenPrefixes, default production and staging). Ownership by a
  * known project never lifts this.
+ *
+ * The mount table is the host's (platform.mjs): read on Linux, not applicable
+ * on darwin, which has no container mounts to find. `mounts` says which, so a
+ * table that was not read is never mistaken for one without mounts. A test
+ * names its own `mountinfo` file.
  */
-export async function forbiddenRoots ({ home = os.homedir(), projectsDir = projectsRoot(), panelRoot = PANEL_ROOT, mountinfo = '/proc/self/mountinfo', prefixes = hostSettings().selection.forbiddenPrefixes } = {}) {
+export async function forbiddenRootsReport ({ home = os.homedir(), projectsDir = projectsRoot(), panelRoot = PANEL_ROOT, mountinfo = null, prefixes = hostSettings().selection.forbiddenPrefixes, platform = hostPlatform() } = {}) {
   const roots = new Set()
   const add = async (p) => { roots.add(await fs.realpath(p).catch(() => path.resolve(p))) }
   await add(home)
@@ -93,13 +99,17 @@ export async function forbiddenRoots ({ home = os.homedir(), projectsDir = proje
   try { entries = await fs.readdir(projectsDir) } catch { /* none */ }
   const conventional = new RegExp(`^(?:${prefixes.join('|')})\\.`)
   for (const name of entries) if (conventional.test(name)) await add(path.join(projectsDir, name))
-  const info = await fs.readFile(mountinfo, 'utf8').catch(() => '')
-  for (const line of info.split(NL)) {
+  const table = mountinfo
+    ? await fs.readFile(mountinfo, 'utf8').then((text) => ({ status: 'read', source: mountinfo, text }), () => ({ status: 'unreadable', source: mountinfo, text: '' }))
+    : await platform.mountTable()
+  for (const line of table.text.split(NL)) {
     const fields = line.split(' ')
     if (fields.length > 5 && /(^|,)idmapped(,|$)/.test(fields[5])) await add(fields[4].replace(/\\040/g, ' '))
   }
-  return roots
+  return { roots, mounts: { status: table.status, source: table.source, ...(table.reason ? { reason: table.reason } : {}) } }
 }
+
+export const forbiddenRoots = async (options) => (await forbiddenRootsReport(options)).roots
 const NL = String.fromCharCode(10)
 
 async function ownerRoot (resolved, directory) {

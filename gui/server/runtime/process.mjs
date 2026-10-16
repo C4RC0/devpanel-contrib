@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 
 import { systemClock } from './clock.mjs'
+import { hostPlatform, REAP_TAG } from './platform.mjs'
 
 /*
  * Subprocess execution with confirmed termination.
@@ -84,26 +85,29 @@ export async function terminateGroup (pgid, { graceMs = DEFAULT_GRACE_MS, clock 
  *
  * A descendant that called setsid() has left the group, so signalling the group
  * cannot reach it — but it inherited the environment, and every reaped command
- * carries a unique DEVPANEL_REAP_TAG. /proc/<pid>/environ is readable for our
- * own processes; elsewhere, and for anything we may not inspect, nothing is
- * reported. (Matching stdio instead does not work: Node's pipes are socketpairs,
- * and the two ends have different inodes.)
+ * carries a unique DEVPANEL_REAP_TAG. The host's platform module finds the
+ * processes still carrying it, and says whether it could look at all.
+ * (Matching stdio instead does not work: Node's pipes are socketpairs, and the
+ * two ends have different inodes.)
+ *
+ * The record keeps "found nothing" apart from "could not tell": `complete` is
+ * the only status that proves the tag is gone. A host whose scan mechanism is
+ * not proved (darwin's `ps -E`) keeps the parser's verdict as the status and
+ * says so with `mechanism: 'unproved'`: a scan that parsed complete counts as
+ * complete; one that did not is also `reason: 'structural'`, because no rescan
+ * on this host can prove it (cleanup-barrier.mjs).
  */
-async function taggedProcesses (tag) {
-  const { readdir, readFile } = await import('node:fs/promises')
-  const needle = Buffer.from(`${REAP_TAG}=${tag}\0`)
-  let entries = []
-  try { entries = await readdir('/proc') } catch { return [] }
-  const found = []
-  for (const entry of entries) {
-    const pid = Number(entry)
-    if (!Number.isInteger(pid) || pid === process.pid) continue
-    try { if ((await readFile(`/proc/${pid}/environ`)).includes(needle)) found.push(pid) } catch { /* gone, or not ours */ }
+function scanRecord (platform, found, tag) {
+  const record = { method: found.method, tag, escaped: found.pids.length,
+    ...(found.notInspected?.length ? { notInspected: found.notInspected } : {}) }
+  if (!platform.descendantScan?.proved) {
+    const unproved = { status: found.status, mechanism: 'unproved', ...record, detail: platform.descendantScan?.reason ?? null }
+    return found.status === 'complete' ? unproved : { ...unproved, reason: 'structural', ...(found.reason ? { parsedReason: found.reason } : {}) }
   }
-  return found
+  return { status: found.status, ...record, ...(found.reason ? { reason: found.reason } : {}) }
 }
 
-async function terminatePids (pids, { graceMs, clock }) {
+export async function terminatePids (pids, { graceMs = DEFAULT_GRACE_MS, clock = systemClock } = {}) {
   for (const pid of pids) { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
   const until = clock.now() + graceMs
   while (pids.some(alive) && clock.now() < until) await new Promise((r) => setTimeout(r, 20))
@@ -112,7 +116,6 @@ async function terminatePids (pids, { graceMs, clock }) {
 }
 
 const DEFAULT_CLOSE_GRACE_MS = 2000
-const REAP_TAG = 'DEVPANEL_REAP_TAG'
 
 export class ProcessError extends Error {
   constructor (message, detail = {}) {
@@ -147,6 +150,11 @@ export async function runProcess ({
    * purpose.
    */
   reap = false,
+  // The tag to reap by; a caller that records it before the spawn (the engine,
+  // so a crashed owner's descendants can still be found) passes its own.
+  reapTag = null,
+  // The host OS probes (platform.mjs); injectable so tests can read a fake listing.
+  platform = hostPlatform(),
   closeGraceMs = DEFAULT_CLOSE_GRACE_MS,
   /**
    * Observation hooks, for telemetry while the process runs:
@@ -157,7 +165,7 @@ export async function runProcess ({
    */
   observe = null
 } = {}) {
-  const tag = reap ? crypto.randomUUID() : null
+  const tag = reap ? (reapTag ?? crypto.randomUUID()) : null
   const child = spawn(command, args, {
     cwd,
     env: tag ? { ...env, [REAP_TAG]: tag } : env,
@@ -254,7 +262,7 @@ export async function runProcess ({
   }
 
   let outcome
-  const leftovers = { group: null, escaped: [], streamsAbandoned: false }
+  const leftovers = { group: null, escaped: [], streamsAbandoned: false, scan: { status: 'not-requested' } }
   try {
     outcome = await exited
     // Termination is awaited AFTER the process exited, so this returns only once
@@ -264,9 +272,14 @@ export async function runProcess ({
     if (reap) {
       // Escaped descendants are reaped whether or not they hold our output: one
       // that redirected its stdio still writes into a workspace being handed on.
-      leftovers.escaped = await taggedProcesses(tag)
+      const found = await platform.taggedProcesses(tag)
+      leftovers.escaped = found.pids
       if (leftovers.escaped.length) await terminatePids(leftovers.escaped, { graceMs, clock })
+      leftovers.scan = scanRecord(platform, found, tag)
     }
+    // Termination of the group is confirmed above; of escaped descendants only
+    // a complete scan can say it.
+    if (termination) Object.assign(termination, { descendants: leftovers.scan.status, complete: reap && leftovers.scan.status === 'complete' })
     await closeWithin(closeGraceMs)
     if (!closed) {
       // Output already read is kept; a holder we may not stop cannot keep the

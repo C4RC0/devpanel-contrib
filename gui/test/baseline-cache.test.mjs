@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { execFile } from 'node:child_process'
 
 import { adoptBaseline, baselineCacheFor, baselineIdentity, baselinesDir, pruneBaselines, storeBaseline, tierTarget } from '../server/runtime/baseline-cache.mjs'
 import { compareFailures } from '../server/runtime/baseline-failures.mjs'
@@ -227,6 +228,50 @@ export default async function (t) {
       t.eq('and no store', cache.status?.state, 'unavailable')
       await fs.chmod(path.join(src, 'APP-modules', 'a.mjs'), 0o644)
     }
+  }
+
+  t.section('local files are hashed without sha256sum, under the same key as before (P4-1)')
+  {
+    // The key exactly as the sha256sum version built it: [path, hex] in `files` order.
+    const hexOf = async (file) => sha(await fs.readFile(file))
+    const expected = (files, env) => sha(JSON.stringify({ version: 1, baseCommit: commit, targetHash: targetKey, files, environment: { host: 'local', sha256: sha(env) } }))
+    const env = await fs.readFile(environmentFile, 'utf8')
+    const id = await baselineIdentity({ target, targetKey, baseCommit: commit })
+    t.eq('same bytes, paths and environment: the same key', id.key, expected([[scope, await hexOf(scope)], [version, await hexOf(version)]], env))
+    const sums = await new Promise((resolve) => execFile('sha256sum', ['--', scope, version], (error, out) => resolve(error ? null : out)))
+    if (sums === null) t.skip('agrees with sha256sum', 'no sha256sum on this host')
+    else t.eq('each digest is the one sha256sum prints', id.record.files.map(([, hex]) => hex), sums.trim().split('\n').map((l) => l.split(/\s+/)[0]))
+    const reordered = await baselineIdentity({ target: { ...target, baselineCache: { ...target.baselineCache, files: [version, scope, version] } }, targetKey, baseCommit: commit })
+    t.eq('order and repeats are kept', reordered.record.files.map(([f]) => f), [version, scope, version])
+    t.ok('and a different order is a different key', reordered.key !== id.key)
+    const relative = path.relative(process.cwd(), scope)
+    const rel = await baselineIdentity({ target: { ...target, baselineCache: { ...target.baselineCache, files: [relative] } }, targetKey, baseCommit: commit })
+    t.eq('a relative path is read from this process\'s directory and recorded as given', rel.record.files, [[relative, await hexOf(scope)]])
+  }
+
+  t.section('a missing or unreadable local file prevents cache use with a specific error (P4-2)')
+  {
+    const failing = async (file) => baselineIdentity({ target: { ...target, baselineCache: { ...target.baselineCache, files: [file] } }, targetKey, baseCommit: commit })
+    const missing = await failing(path.join(env, 'absent.json'))
+    t.eq('a missing file', [missing.code, Boolean(missing.key)], ['BASELINE_FILE_UNREADABLE', false])
+    t.ok('naming it', missing.error.includes('absent.json') && missing.error.includes('ENOENT'), missing.error)
+    t.eq('a directory', (await failing(env)).code, 'BASELINE_FILE_UNREADABLE')
+    if (process.getuid?.() === 0) t.skip('an unreadable file', 'root reads a mode-000 file anyway')
+    else {
+      const locked = path.join(env, 'locked')
+      await fs.writeFile(locked, 'secret\n')
+      await fs.chmod(locked, 0o000)
+      t.eq('an unreadable file', (await failing(locked)).code, 'BASELINE_FILE_UNREADABLE')
+      await fs.chmod(locked, 0o644)
+    }
+    const cache = baselineCacheFor({ target: { ...target, baselineCache: { ...target.baselineCache, files: [path.join(env, 'absent.json')] } }, targetKey, baseCommit: commit, issuePath, runDir: path.join(issuePath, 'runs', 'run-g'), runId: 'run-g', clock: clockAt(Date.now()) })
+    t.eq('the cache is not used, and says why', [await cache.lookup('base-g'), cache.status?.state, cache.status?.code], [null, 'unavailable', 'BASELINE_FILE_UNREADABLE'])
+  }
+
+  t.section('remote (SSH) hashing is unchanged (P4-3)')
+  {
+    const source = await fs.readFile(new URL('../server/runtime/baseline-cache.mjs', import.meta.url), 'utf8')
+    t.ok('the SSH branch still hashes with sha256sum on the target', source.includes('} else if (files.length) {\n    const out = await exec(`sha256sum -- ${files.map(shellQuote).join(\' \')}`)'))
   }
 
   for (const d of temps) await fs.rm(d, { recursive: true, force: true })

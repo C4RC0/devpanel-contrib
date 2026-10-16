@@ -355,6 +355,28 @@ async function recoverRun () {
     await load()
   } catch (error) { actionError.value = error.message } finally { recovering.value = false }
 }
+/* Processes a turn started were not proved gone (runtime/cleanup-barrier.mjs).
+   A person may record that they are, with what they checked: that lifts the
+   run's hold and any barrier it put on the project's checkout. */
+const canAcknowledgeCleanup = computed(() => !issue.value?.archived && (run.value?.supportedActions ?? []).includes('acknowledge-cleanup'))
+const cleanupDialog = ref(false)
+const cleanupReason = ref('')
+const cleanupBusy = ref(false)
+const cleanupError = ref('')
+function openCleanupDialog () {
+  cleanupReason.value = ''
+  cleanupError.value = ''
+  cleanupDialog.value = true
+}
+async function acknowledgeCleanup () {
+  cleanupBusy.value = true
+  cleanupError.value = ''
+  try {
+    await api.acknowledgeCleanup(project.value, issueId.value, run.value.runId, cleanupReason.value)
+    cleanupDialog.value = false
+    await load()
+  } catch (error) { cleanupError.value = error.message } finally { cleanupBusy.value = false }
+}
 /* A turn left changes the integrity check could not accept — typically an
    author that failed (quota, crash) after editing. The operator inspects what
    changed and chooses: keep the partial work and continue, confirm it was
@@ -1049,6 +1071,19 @@ watch(() => route.query.run, (runId) => {
         </v-card>
       </v-dialog>
 
+      <v-dialog v-model="cleanupDialog" max-width="560">
+        <v-card title="Acknowledge cleanup">
+          <v-card-text>
+            <p class="mb-2">{{ run?.explanation?.detail }}</p>
+            <p v-if="run?.explanation?.cause" class="muted mb-2"><code>{{ run.explanation.cause }}</code></p>
+            <p class="mb-4">You are recording that no process a turn started is still running. Your name and reason are kept on the run and on the project.</p>
+            <v-textarea v-model="cleanupReason" label="What you checked (required)" rows="3" auto-grow counter="2000" density="compact" variant="outlined" />
+            <v-alert v-if="cleanupError" type="error" variant="tonal">{{ cleanupError }}</v-alert>
+          </v-card-text>
+          <v-card-actions><v-spacer /><v-btn :disabled="cleanupBusy" @click="cleanupDialog = false">Cancel</v-btn><v-btn color="primary" :loading="cleanupBusy" :disabled="!cleanupReason.trim()" @click="acknowledgeCleanup">Acknowledge</v-btn></v-card-actions>
+        </v-card>
+      </v-dialog>
+
 
       <!-- ================================================ card 2: the run -->
       <!-- An archived issue: where its time went, per seat, model and standing. -->
@@ -1110,6 +1145,7 @@ watch(() => route.query.run, (runId) => {
               <code class="runbar__id">{{ run.runId }}</code>
             </div>
           <div v-if="!issue.archived" class="runbar__actions">
+            <v-btn v-if="canAcknowledgeCleanup" size="small" variant="tonal" color="warning" @click="openCleanupDialog">Acknowledge cleanup…</v-btn>
             <v-btn v-if="canResume" size="small" variant="flat" color="primary" :loading="resuming" @click="openResume">Resume run</v-btn>
             <ContinueRun v-if="canContinue" :project="project" :issue-id="issueId" :run="run" @continued="load()" />
             <v-btn v-if="canRefreshChecks" size="small" variant="tonal" color="primary" :loading="refreshingChecks" @click="refreshChecks">Refresh checks</v-btn>

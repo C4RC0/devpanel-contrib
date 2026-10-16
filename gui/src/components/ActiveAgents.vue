@@ -84,6 +84,7 @@ const OWNERSHIP = {
   'this-process': null,
   'another-process': 'driven by another devpanel process',
   'another-run': 'the issue lock is held for a different run',
+  'owner-unknown': 'its owner cannot be established — if that process is gone, delete the issue\'s .run.lock, then recover the run',
   unowned: 'nothing is driving this run — it needs recovery'
 }
 

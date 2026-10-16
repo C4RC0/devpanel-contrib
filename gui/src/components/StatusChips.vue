@@ -28,7 +28,9 @@ const since = (iso) => {
 const runLink = (project, issueId, runId) => ({ path: `/projects/${project}/${issueId}`, query: runId ? { run: runId } : {} })
 
 // ------------------------------------------------------------------ agents
-const running = computed(() => panel.runs.filter((r) => r.ownership !== 'unowned' && r.agents?.length).map((r) => ({
+// Nobody is driving a run without an owner, or whose owner cannot be established.
+const ownerless = (r) => r.ownership === 'unowned' || r.ownership === 'owner-unknown'
+const running = computed(() => panel.runs.filter((r) => !ownerless(r) && r.agents?.length).map((r) => ({
   key: r.runId,
   to: runLink(r.project, r.issueId, r.runId),
   title: r.agents.map((a) => a.role).join(' · '),
@@ -40,7 +42,7 @@ const running = computed(() => panel.runs.filter((r) => r.ownership !== 'unowned
 })))
 const WAITING = { question: 'waiting for your answer', paused: 'paused' }
 const waiting = computed(() => [
-  ...panel.runs.filter((r) => r.ownership !== 'unowned' && !r.agents?.length).map((r) => ({
+  ...panel.runs.filter((r) => !ownerless(r) && !r.agents?.length).map((r) => ({
     key: r.runId, to: runLink(r.project, r.issueId, r.runId),
     title: r.status === 'preflighting' ? 'starting' : 'between turns', sub: `${shortProject(r.project)} · ${r.issueName ?? r.issueId}`, startedAt: null
   })),
@@ -51,9 +53,9 @@ const waiting = computed(() => [
 ])
 const STOPPED = { blocked: 'blocked', failed: 'failed', recovery: 'needs recovery' }
 const stopped = computed(() => [
-  ...panel.runs.filter((r) => r.ownership === 'unowned').map((r) => ({
+  ...panel.runs.filter(ownerless).map((r) => ({
     key: r.runId, to: runLink(r.project, r.issueId, r.runId),
-    title: 'no process owns this run', sub: `${shortProject(r.project)} · ${r.issueName ?? r.issueId}`, startedAt: null
+    title: r.ownership === 'owner-unknown' ? 'its owner cannot be established' : 'no process owns this run', sub: `${shortProject(r.project)} · ${r.issueName ?? r.issueId}`, startedAt: null
   })),
   ...panel.attention.filter((a) => STOPPED[a.kind]).map((a) => ({
     key: `${a.project}/${a.issueId}/${a.runId}`, to: runLink(a.project, a.issueId, a.runId),

@@ -1,5 +1,6 @@
 import { checksOnlyBlock } from './run-control.mjs'
 import { runResult } from './run-result.mjs'
+import { openCleanup, STRUCTURAL } from './cleanup-barrier.mjs'
 
 // Where a run stands, in words a person reads once and acts on.
 //
@@ -32,6 +33,18 @@ const ROLE = (role) => {
   }[role] ?? `the ${role.replace(/-/g, ' ')}`
 }
 const Cap = (s) => s.charAt(0).toUpperCase() + s.slice(1)
+
+/** A turn's escaped descendants were not proved gone (cleanup-barrier.mjs). */
+function cleanupUnproved (run, open, kept) {
+  const structural = open.some((e) => e.structural)
+  const inPlace = run.workspace?.isolation === 'in-place'
+  return { tone: 'warning', headline: 'Stopped: processes a turn started may still be running', kept,
+    detail: `${structural ? `${Cap(STRUCTURAL)}.` : 'The scan for processes the turn left behind could not be completed, so nothing proves they are gone.'} Until that is settled the run's workspace goes to no one${inPlace ? ', and no in-place run of this project starts on its checkout' : ''}.`,
+    cause: open.map((e) => `${ROLE(e.role)}: DEVPANEL_REAP_TAG=${e.tag}`).join('; '),
+    next: structural
+      ? 'Look for processes whose environment carries that tag (ps -E -ww -A -o pid=,command=), stop any you find, then Acknowledge cleanup, saying what you checked.'
+      : 'Resume proves the cleanup first and stops what it finds. If it cannot, look for processes whose environment carries that tag, stop them, then Acknowledge cleanup, saying what you checked.' }
+}
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 const firstLine = (text, max = 300) => {
   const line = String(text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? ''
@@ -250,10 +263,20 @@ const DELIVERY = {
 }
 
 /** Where a run stands, for a person. See the header for the fields. */
-export function explainRun (run, { outputs = {}, active = [] } = {}) {
+export function explainRun (run, { outputs = {}, active = [], ownership = null } = {}) {
   if (!run) return null
   if (run.landed) return landed(run, explainRun({ ...run, landed: undefined }, { outputs, active }))
   const kept = run.workspace?.state === 'retained' ? 'Its workspace and logs are kept.' : 'Its logs are kept.'
+
+  // The run lock names an owner whose liveness cannot be proved (lock.mjs):
+  // devpanel neither takes the run over nor stops it.
+  if (ownership?.state === 'owner-unknown') {
+    return { tone: 'warning', headline: 'Its owner cannot be established', kept,
+      detail: `The run lock names process ${ownership.pid} on ${ownership.host}, and whether it is still running cannot be proved, so this server neither takes the run over nor stops it.`,
+      next: `If that process is gone, delete ${ownership.file}, then Recover the run. devpanel never removes a lock it cannot prove dead.` }
+  }
+  const open = openCleanup(run)
+  if (open.length && !['pending', 'preflighting', 'running', 'stopping'].includes(run.status)) return cleanupUnproved(run, open, kept)
 
   // A step still marked in flight on a run that is no longer live: whatever it
   // did is unknown. A panel restart has its own wording (recover), below.

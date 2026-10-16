@@ -4,44 +4,28 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { systemClock } from './clock.mjs'
+import { hostPlatform } from './platform.mjs'
 
 /*
  * Atomic lock carrying owner identity.
  *
  * Liveness is established POSITIVELY — the pid must exist, and its boot id and
  * process start time must match what the lock recorded. Lock age is never
- * evidence: a long invocation is indistinguishable from a dead one by age alone.
+ * evidence: a long invocation is indistinguishable from a dead one by age.
+ * The boot and process probes are the host's (platform.mjs), injectable as
+ * `{ platform }`; a probe that cannot answer makes the owner 'unknown'.
  */
 
-let cachedBootId = null
+/** Recorded when the owner's own boot identity could not be read (darwin). */
+const UNPROVED_BOOT = 'unproved:'
 
-async function bootId () {
-  if (cachedBootId) return cachedBootId
-  try {
-    cachedBootId = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
-  } catch {
-    cachedBootId = `no-boot-id:${os.hostname()}`
-  }
-  return cachedBootId
-}
-
-/** Field 22 of /proc/<pid>/stat — starttime in clock ticks since boot. */
-async function processStartedAt (pid) {
-  try {
-    const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8')
-    // The comm field may contain spaces and parentheses, so split after the last ')'.
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
-    return fields[19] ?? null
-  } catch {
-    return null
-  }
-}
-
-export async function currentOwner (runId = null) {
+export async function currentOwner (runId = null, { platform = hostPlatform() } = {}) {
+  const boot = await platform.bootId()
+  const start = await platform.processStart(process.pid)
   return {
     pid: process.pid,
-    bootId: await bootId(),
-    processStartedAt: await processStartedAt(process.pid),
+    bootId: boot ?? `${UNPROVED_BOOT}${os.hostname()}`,
+    processStartedAt: start.state === 'present' ? start.startedAt : null,
     host: os.hostname(),
     runId
   }
@@ -49,17 +33,21 @@ export async function currentOwner (runId = null) {
 
 /**
  * Is the recorded owner still running? Only 'alive' permits waiting; only 'dead'
- * permits taking over. 'unknown' means we could not establish either, and the
- * caller must treat the lock as held.
+ * permits taking over. 'unknown' means we could not establish either — a probe
+ * failed or answered something unreadable — and the caller must treat the lock
+ * as held.
  */
-export async function ownerLiveness (owner) {
+export async function ownerLiveness (owner, { platform = hostPlatform() } = {}) {
   if (!owner?.pid) return 'unknown'
-  if (owner.bootId !== await bootId()) return 'dead'      // machine rebooted since
+  const boot = await platform.bootId()
+  if (boot === null || String(owner.bootId ?? '').startsWith(UNPROVED_BOOT)) return 'unknown'
+  if (owner.bootId !== boot) return 'dead'                // machine rebooted since
   if (owner.host !== os.hostname()) return 'unknown'      // another machine; cannot tell
 
-  const startedAt = await processStartedAt(owner.pid)
-  if (startedAt === null) return 'dead'                   // no such process
-  if (owner.processStartedAt && startedAt !== owner.processStartedAt) return 'dead' // pid reused
+  const start = await platform.processStart(owner.pid)
+  if (start.state === 'absent') return 'dead'             // no such process
+  if (start.state !== 'present') return 'unknown'         // the probe could not tell
+  if (owner.processStartedAt && start.startedAt !== owner.processStartedAt) return 'dead' // pid reused
   return 'alive'
 }
 
@@ -82,6 +70,7 @@ export async function acquire (file, {
   runId = null,
   clock = systemClock,
   takeOverDead = true,
+  platform = hostPlatform(),
   // How long to queue behind a LIVE owner. Step allocation is contended by design
   // — the engine and an API request can both want a number — so callers queue
   // rather than fail. Zero means fail immediately, which is what a run lock wants.
@@ -89,7 +78,7 @@ export async function acquire (file, {
   pollMs = 10
 } = {}) {
   await fs.mkdir(path.dirname(file), { recursive: true })
-  const owner = await currentOwner(runId)
+  const owner = await currentOwner(runId, { platform })
   const token = crypto.randomUUID()
   const record = { purpose, token, owner, acquiredAt: clock.iso(), heartbeatAt: clock.iso() }
   const deadline = Date.now() + waitMs
@@ -120,9 +109,9 @@ export async function acquire (file, {
   for (;;) {
     if (await createWith(file, record)) return handle
 
-    const { held, liveness } = await examine(file)
+    const { held, liveness } = await examine(file, platform)
     if (liveness === 'dead' && takeOverDead) {
-      if (await takeOver(file, held)) continue
+      if (await takeOver(file, held, platform)) continue
       if (Date.now() < contendedUntil) { await new Promise((r) => setTimeout(r, pollMs)); continue }
     } else if (Date.now() < deadline) {
       // Queue behind a live owner until the deadline, then give up.
@@ -161,7 +150,7 @@ async function createWith (file, record) {
   }
 }
 
-async function examine (file) {
+async function examine (file, platform = hostPlatform()) {
   let text
   try { text = await fs.readFile(file, 'utf8') } catch (error) {
     if (error.code === 'ENOENT') return { held: null, liveness: 'dead' }   // released meanwhile
@@ -169,7 +158,7 @@ async function examine (file) {
   }
   try {
     const held = JSON.parse(text)
-    return { held, liveness: await ownerLiveness(held.owner) }
+    return { held, liveness: await ownerLiveness(held.owner, { platform }) }
   } catch {
     const stat = await fs.stat(file).catch(() => null)
     const old = stat && Date.now() - stat.mtimeMs > UNREADABLE_LOCK_DEAD_AFTER_MS
@@ -182,13 +171,13 @@ async function examine (file) {
  * the dead owner and both unlink — which would let one delete the other's newly
  * acquired lock and leave two holders believing they own it.
  */
-async function takeOver (file, held) {
+async function takeOver (file, held, platform = hostPlatform()) {
   const gate = `${file}.takeover`
   const token = crypto.randomUUID()
-  if (!await createWith(gate, { purpose: 'takeover', token, owner: await currentOwner(), at: new Date().toISOString() })) {
+  if (!await createWith(gate, { purpose: 'takeover', token, owner: await currentOwner(null, { platform }), at: new Date().toISOString() })) {
     // Another contender is taking over — unless that contender died inside the
     // gate, which would otherwise block this lock forever.
-    const { held: gateHolder, liveness } = await examine(gate)
+    const { held: gateHolder, liveness } = await examine(gate, platform)
     if (liveness === 'dead') {
       const now = await fs.readFile(gate, 'utf8').catch(() => null)
       if (now !== null && (gateHolder === null || JSON.parse(now).token === gateHolder.token)) await fs.rm(gate, { force: true })
@@ -201,13 +190,13 @@ async function takeOver (file, held) {
     let current = null
     try { current = JSON.parse(await fs.readFile(file, 'utf8')) } catch {
       // Unreadable: only an old one left by the earlier writer may be removed.
-      const { liveness } = await examine(file)
+      const { liveness } = await examine(file, platform)
       if (held !== null || liveness !== 'dead') return false
       await fs.rm(file, { force: true })
       return true
     }
     if (!held || current.token !== held.token) return false          // replaced since we looked
-    if (await ownerLiveness(current.owner) !== 'dead') return false  // no longer dead
+    if (await ownerLiveness(current.owner, { platform }) !== 'dead') return false  // no longer dead
     await fs.rm(file, { force: true })
     return true
   } finally {

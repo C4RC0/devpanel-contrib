@@ -7,7 +7,8 @@ import { promisify } from 'node:util'
 import { gitWorktreeProvider, worktreeDiffDelivery } from '../server/runtime/launch.mjs'
 import { applyToSource } from '../server/runtime/source-delivery.mjs'
 import { fingerprint, baselineOf } from '../server/runtime/fingerprint.mjs'
-import { knownProjectRoots, forbiddenRoots, authorizer, PANEL_ROOT } from '../server/runtime/selection.mjs'
+import { knownProjectRoots, forbiddenRoots, forbiddenRootsReport, authorizer, PANEL_ROOT } from '../server/runtime/selection.mjs'
+import { platformFor } from '../server/runtime/platform.mjs'
 import { engineFixture, cleanupFixtures } from './fakes/fixture.mjs'
 
 const exec = promisify(execFile)
@@ -276,6 +277,31 @@ export default async function (t) {
     t.eq('a target containing a forbidden root is refused', containing?.code, 'MATERIALIZE_FORBIDDEN')
     const beside = await authorize({ owner: o, resolved: path.join(o, 'modules'), path: 'shared' }).then(() => null, (e) => e)
     t.eq('a sibling is not', beside, null)
+  }
+
+  t.section('11. darwin injected: no /proc is read, mount discovery is not applicable, the roots still hold')
+  {
+    const o = await temp('sel-darwin-')
+    const home = path.join(o, 'home')
+    const projectsDir = path.join(o, 'projects')
+    await write(path.join(home, '.ssh', 'id'), 'key')
+    await fs.mkdir(path.join(projectsDir, 'production.example'), { recursive: true })
+    const reads = []
+    const spy = async (file) => { reads.push(String(file)); return '' }
+    const darwin = platformFor('darwin', { readFile: spy, exec: async () => ({ ok: false, code: 1, stdout: '', error: 'not a mac' }) })
+    const report = await forbiddenRootsReport({ home, projectsDir, panelRoot: path.join(o, 'panel'), prefixes: ['production'], platform: darwin })
+    t.eq('mount discovery is reported as not applicable', report.mounts.status, 'not-applicable')
+    t.eq('and nothing under /proc was read', reads.filter((f) => f.startsWith('/proc')), [])
+    t.ok('the home is forbidden', report.roots.has(await fs.realpath(home)))
+    t.ok('the panel root is forbidden', [...report.roots].some((r) => r.endsWith('/panel')))
+    t.ok('a protected prefix under the projects root is forbidden', [...report.roots].some((r) => r.endsWith('/production.example')))
+    const authorize = authorizer({ known: new Set([o]), forbidden: report.roots })
+    const inside = await authorize({ owner: o, resolved: path.join(home, '.ssh'), path: 'keys' }).then(() => null, (e) => e)
+    t.eq('a target inside the home is refused', inside?.code, 'MATERIALIZE_FORBIDDEN')
+    const linuxReads = []
+    const linux = platformFor('linux', { readFile: async (file) => { linuxReads.push(String(file)); return '' } })
+    const linuxReport = await forbiddenRootsReport({ home, projectsDir, panelRoot: path.join(o, 'panel'), prefixes: ['production'], platform: linux })
+    t.eq('on linux the default table is the mount table, read', [linuxReport.mounts.status, linuxReads], ['read', ['/proc/self/mountinfo']])
   }
 
   await cleanupFixtures?.()

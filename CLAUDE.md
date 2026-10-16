@@ -178,7 +178,14 @@ documents the HTTP/socket API, issue storage rules, the front-end conventions, a
   set, then rebuilds the candidate in a temp worktree and compares fingerprints; a mismatch blocks with
   `delivery-unverifiable` and keeps the worktree.
   `runtime/lock.mjs` — run lock and step-allocation lock carrying pid/boot-id/start-time;
-  recovery must prove the previous owner is dead, not merely old.
+  recovery must prove the previous owner is dead, not merely old. A failed or unreadable probe is `unknown`,
+  never taken over (the supervisor labels such a run `owner-unknown`; execution-contract.md "Locking").
+- `runtime/platform.mjs` — every host OS probe, in one module: boot and process identity, tagged-process
+  inspection, mount discovery, and what the host cannot do (`run.host = describe()`). Linux is the former
+  `/proc` code verbatim; darwin uses sysctl and ps (start times to the second; its `ps -E` reap scan is
+  not proved: a listing that parses complete counts as complete with `mechanism: 'unproved'`,
+  anything short of that is `structural` and only an acknowledgement settles it). Injectable (`platformFor(id, { exec, readFile, … })`);
+  imports only node builtins, so runProcess can use it.
 - `runtime/integrate.mjs` — operator-approved merge of a `commit` delivery into the project's integration branch:
   bound to the delivered revision, refused when the candidate's repository is not the declared source repository
   or the target is checked out dirty; conflicts abort and are recorded. `commit` delivery lives in `launch.mjs`.
@@ -263,7 +270,11 @@ documents the HTTP/socket API, issue storage rules, the front-end conventions, a
   `checks-failed-unchanged`; that, or `rounds-exhausted` with every auditor approving the latest revision and its check
   not passing (`checksOnlyBlock`, run-control.mjs), offers `refresh-checks` to rerun the checks on the candidate.
 - `runtime/process.mjs` — spawning with cancellation that terminates the whole process group and awaits
-  confirmed termination before reporting. `runtime/command.mjs` resolves CLI binaries
+  confirmed termination before reporting. A reaped command's escaped descendants are found by their
+  `DEVPANEL_REAP_TAG` (`leftovers.scan`: complete | incomplete | unavailable | not-requested); a turn whose
+  scan is not complete blocks `cleanup-unproved` until a proof or a recorded operator acknowledgement, and an
+  in-place run's open entries bar the project checkout (`runtime/cleanup-barrier.mjs`, execution-contract.md
+  "Escaped descendants"). `runtime/command.mjs` resolves CLI binaries
   (`DEVPANEL_CLAUDE_BIN` / `DEVPANEL_CODEX_BIN`, PATH, then `~/.local/bin`).
 - `project-actions.mjs` — operator scripts on the live checkout: every project with a `checkpoint.sh` gets a `checkpoint`
   action (an installation's own script, typically version, commit, publish), `projects/<id>.yaml` `actions` add or replace. One

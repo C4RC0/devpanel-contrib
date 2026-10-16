@@ -1062,6 +1062,99 @@ Recovery must establish **positively that the previous owner is no longer active
 — the pid exists *and* its start time and boot id match. Lock age alone is not
 evidence: a long invocation is indistinguishable from a dead one by age.
 
+Liveness has three answers (`runtime/lock.mjs`, probes in `runtime/platform.mjs`):
+`alive`, `dead` (proven absence, another start time for the pid, another boot) and
+`unknown` (no pid, another host, or a probe that failed or answered something
+unreadable — a start time with any component out of range is unreadable, never
+rolled over into another instant). Only `dead` is taken over — by `acquire` (run,
+step-allocation and top-level supervisor locks) and by the supervisor at startup,
+which leaves a run whose owner is `unknown` alone, refuses to stop it and labels
+it `owner-unknown`. A lock naming the server's own pid is its own only when that
+owner is proved `alive`; an `unknown` one is held like any other.
+If that process is gone, a person deletes the issue's `.run.lock` and recovers
+the run; devpanel never removes a lock it cannot prove dead.
+
+The `unknown` answer for a failed or malformed probe applies to the darwin
+probes and to the decision itself. The Linux probes are the code that read
+`/proc` before, moved verbatim with their outcomes: a `/proc/<pid>/stat` that
+cannot be read, or lacks field 22, still reads as an absent process. On darwin
+the boot identity is `sysctl kern.bootsessionuuid` and the start time `ps -o
+lstart` in the C locale and UTC, which has **whole-second** precision (Linux:
+clock ticks). That is accepted on one argument — XNU allocates pids
+sequentially and wraps at 99999, so a pid comes back within the same second
+only after the whole range was used in that second — and recorded on every run
+as `host.startTimePrecision`. It is unproved until a Mac runs
+`cd ~/devpanel/gui && node test/run.mjs lock`.
+
+## Escaped descendants
+
+Every agent turn runs with `reap`: when it ends, its process group is stopped
+and the host is scanned for processes still carrying its `DEVPANEL_REAP_TAG`
+(a descendant that left the group with setsid). The tag is created by the
+engine and stored on the pending invocation before launch, so a lost owner's
+turns can be scanned too. The scan says `complete` (only this proves the
+descendants gone), `incomplete`, `unavailable`, or `not-requested` (check
+commands, which are not reaped). On a host whose scan mechanism is not proved
+(darwin, until a Mac proves `ps -E`; `host.unavailable` names
+`descendantScanProof`) the parser's verdict is the status and the record says
+`mechanism: 'unproved'`: a listing that parses complete — every row of this user
+inspected, this process present, no malformed row — counts as `complete`, its
+tagged pids are terminated and the turn proceeds; it is never recorded as plain
+proved. A listing that does not parse complete, or a `ps` that fails, is
+`incomplete`/`unavailable` with reason `structural`, because no rescan on that
+host can prove it.
+
+A turn whose scan is not `complete` records an open cleanup entry on the run
+(`run.cleanup.entries`), in the same write as the turn's answer and before the
+commit clears the pending invocation that carries the tag, and the run blocks
+`cleanup-unproved`: the answer is kept, but no next turn, retry, replacement
+model, check or delivery starts, and this wins over a pause or anything else of
+the same commit. Concurrent reviews settle first: the run stays live until the
+last sibling has, so a lost owner leaves every sibling's tag to owner-loss
+recovery. Its workspace is retained. An entry closes in one of two ways:
+
+- **a proof** — the tag is scanned again; survivors of the turn's own reaping
+  are terminated and scanned once more, while an owner-lost tag is only
+  scanned (survivors are named, never killed). Resume and Recover prove first;
+  `POST …/runs/:runId/cleanup-proof` proves on demand. Not offered for a
+  `structural` entry or on a host whose scan mechanism is unproved (409
+  `SCAN_UNAVAILABLE`).
+- **an acknowledgement** — a person's recorded word (`POST
+  …/runs/:runId/cleanup-acknowledgement` with a reason; the issue page's
+  *Acknowledge cleanup*), kept with who, when, which run and why; refused while
+  the run is live. It is an explicit override of the gate, and the only way
+  for a `structural` entry (darwin).
+
+An in-place run's workspace is the project checkout, which every issue shares,
+so its open entries are also kept in `issues/<project>/.cleanup-barrier.json`:
+while one is there no new or resumed in-place run of the project starts (409
+`CLEANUP_BARRIER`, which says when only an acknowledgement can lift it).
+Abandoning, deleting or archiving the run does not lift it; a proof or an
+acknowledgement does, and every lift is appended to the file's history. Once the
+issue is deleted or packed by archiving, both work from the barrier entry's own
+metadata (issue, run, tag). Worktree runs are not barred, and one live run per
+project is unchanged. After a lost owner, a tag that scans complete and clean is
+proved at once and bars nothing (on darwin as `mechanism: 'unproved'`); a
+surviving tagged process, a scan short of complete, or a scan that throws bars
+the checkout. The run records are the authority and the file follows them: each
+startup reconcile, each proof, acknowledgement and run end puts a run's open
+entries on it and lifts the ones it has proved or acknowledged, so a tag written
+there ahead of a record a crash then lost does not bar other issues once proved.
+A barrier write that fails is recorded on the run (`recovery.cleanupNoteFailed`
+at startup) and does not stop the reconcile of the others; the supervisor then
+holds those entries itself and admission stays closed (the 409 says the file
+could not be written), trying the write again at every in-place admission
+until it succeeds. The run record is what survives a restart: the next startup
+reconcile reads it and holds the entries again. So nothing removes that record
+while an in-place run has an open entry the barrier file does not record (or the
+file cannot be read): deleting the run, and archiving, packing or deleting its
+issue, are refused (409; `CLEANUP_UNRECORDED` for the run), because a deleted or
+packed record is out of reconcile's reach. Once the file holds the entry they go
+ahead and the file carries it.
+This is one process's guard: an installation runs one panel process, and the
+service's exclusive owner lock (top-level-supervisor.md) keeps a second one from
+admitting runs.
+
 ## Capability: unknown is not unsupported
 
 A roster entry distinguishes the two, because the fix differs:

@@ -8,7 +8,8 @@ export function resumeUnavailable (run) {
   if (!run.workspace?.path || run.workspace.state === 'removed') return 'The saved workspace is no longer available.'
   if (run.release && !(run.status === 'paused' && run.pause?.kind === 'manual' && run.release.status === 'completed')) return 'Use the release recovery or finalization controls for this run.'
   if (run.status === 'paused') return run.pause?.kind === 'manual' ? null : 'Answer the pending question to continue this run.'
-  if (run.status === 'blocked' && ['budget-exhausted', 'rounds-exhausted', 'protocol-repair-exhausted', 'owner-lost'].includes(run.blockedReason)) return null
+  // cleanup-unproved resumes only past a proof or an acknowledgement (engine.resumeExecution).
+  if (run.status === 'blocked' && ['budget-exhausted', 'rounds-exhausted', 'protocol-repair-exhausted', 'owner-lost', 'cleanup-unproved'].includes(run.blockedReason)) return null
   if (run.status === 'failed' && /input_too_large|Input exceeds the maximum length/i.test(run.failures?.at(-1)?.evidence ?? '')) return 'Use Retry input to replace the rejected session and continue.'
   if (['failed', 'cancelled'].includes(run.status) && run.preflight?.state === 'passed') return null
   return 'Use the run’s decision, verification or finalization controls to resolve this condition.'

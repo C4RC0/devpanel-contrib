@@ -6,7 +6,7 @@ import path from 'node:path'
 
 import { resolveCommand } from '../gui/server/runtime/command.mjs'
 import { runProcess, ProcessError } from '../gui/server/runtime/process.mjs'
-import { NL, installationProbe, probeModels, createLedger, lineObserver, assertScratchOutsideWorktree, cancelledError, runtimeError, cumulativeDelta, childEnvironment } from './shared.mjs'
+import { NL, installationProbe, probeModels, createLedger, lineObserver, assertScratchOutsideWorktree, cancelledError, runtimeError, cumulativeDelta, childEnvironment, withReap } from './shared.mjs'
 import { applyFence, assertFenced } from './fence.mjs'
 
 /*
@@ -213,7 +213,16 @@ export function codexErrors (stdout) {
   return found.slice(-5).join('\n').slice(-2000)
 }
 
-export async function invoke ({
+/**
+ * One turn. An error raised after the runtime ran carries its descendant scan
+ * (shared.mjs withReap), so the engine never retries on unproved cleanup.
+ */
+export async function invoke (options) {
+  const ran = {}
+  try { return await invokeOnce(options, ran) } catch (error) { throw withReap(error, ran.run) }
+}
+
+async function invokeOnce ({
   // The devpanel broker for this turn (Phase 3): { socket, token, shim, node }.
   broker = null,
   session,
@@ -245,7 +254,7 @@ export async function invoke ({
   // Continue a COPY of `session` (`exec fork`): the side conversation with a
   // run's coordinator, which must never add a turn to the session it resumes.
   fork = false
-} = {}) {
+} = {}, ran = {}) {
   const invocationId = meta.invocationId ?? crypto.randomUUID()
   if (fork && !session?.id) throw new ProcessError('a fork needs the session it copies', { kind: 'configuration-error', started: false, invocationId })
 
@@ -362,7 +371,8 @@ export async function invoke ({
   const launch = fenced?.applied ? fenced.wrap(COMMAND(), args) : { command: COMMAND(), args }
   let run
   try {
-    run = await runProcess({ command: launch.command, args: launch.args, cwd: readOnlySource ? scratchDir : cwd, env, stdin: body, signal, graceMs, maxBuffer, observe: events.hooks, reap: true })
+    run = await runProcess({ command: launch.command, args: launch.args, cwd: readOnlySource ? scratchDir : cwd, env, stdin: body, signal, graceMs, maxBuffer, observe: events.hooks, reap: true, reapTag: meta.reapTag ?? null })
+    ran.run = run
   } catch (error) {
     if (error.kind === 'spawn-error' && error.started === false) {
       await record(ledgerDir, { invocationId, marker, phase: 'not-started', error: error.message, code: error.code, at: new Date().toISOString() })
@@ -445,7 +455,7 @@ export async function invoke ({
     response: response ?? '',
     usage,
     outcome: 'completed',
-    diagnostics: { durationMs: run.durationMs, events: parsed.events.length, tooling: enforcement, hygiene: Boolean(hygiene),
+    diagnostics: { durationMs: run.durationMs, reap: run.leftovers?.scan ?? null, events: parsed.events.length, tooling: enforcement, hygiene: Boolean(hygiene),
       fence: fence ? { namespace: fenced?.applied ? 1 : 0, reason: fenced?.reason ?? null, proof: fenced?.proof ?? null, mounts: fenced?.mounts ?? null } : null,
       ...(readOnlyTools ? { access: readSeat ? 'read' : 'none (fence not proved)' } : {}) }
   }

@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 
 import { resolveCommand } from '../gui/server/runtime/command.mjs'
 import { runProcess, ProcessError } from '../gui/server/runtime/process.mjs'
-import { NL, installationProbe, probeModels, createLedger, lineObserver, assertScratchOutsideWorktree, cancelledError, runtimeError, versionAtLeast, cumulativeDelta, childEnvironment } from './shared.mjs'
+import { NL, installationProbe, probeModels, createLedger, lineObserver, assertScratchOutsideWorktree, cancelledError, runtimeError, versionAtLeast, cumulativeDelta, childEnvironment, withReap } from './shared.mjs'
+import { hostPlatform } from '../gui/server/runtime/platform.mjs'
 import { applyFence, assertFenced } from './fence.mjs'
 
 /**
@@ -249,7 +250,16 @@ export async function probe ({ depth = 'installation', models = [], profile = 'd
 const { record, reconcile } = createLedger('claude-ledger.jsonl')
 export { reconcile }
 
-export async function invoke ({
+/**
+ * One turn. An error raised after the runtime ran carries its descendant scan
+ * (shared.mjs withReap), so the engine never retries on unproved cleanup.
+ */
+export async function invoke (options) {
+  const ran = {}
+  try { return await invokeOnce(options, ran) } catch (error) { throw withReap(error, ran.run) }
+}
+
+async function invokeOnce ({
   // The devpanel broker for this turn (Phase 3): { socket, token, shim, node }.
   broker = null,
   session,
@@ -286,7 +296,7 @@ export async function invoke ({
   // the side conversation with a run's coordinator, which must never add a
   // turn to the session the run resumes.
   fork = false
-} = {}) {
+} = {}, ran = {}) {
   const invocationId = meta.invocationId ?? crypto.randomUUID()
   if (fork && !session?.id) throw new ProcessError('a fork needs the session it copies', { kind: 'configuration-error', started: false, invocationId })
 
@@ -299,8 +309,8 @@ export async function invoke ({
   // both redundant and harmful (the CLI's sandbox would try to mount over a
   // path that does not exist there). The connection is resolved here for the
   // manifest; it is resolved again below exactly as before.
-  const runtimeTemp = scratchDir && process.platform === 'linux'
-    ? await fs.mkdtemp('/tmp/dpc-') : null
+  const runtimeTemp = scratchDir && hostPlatform().runtimeTempPrefix
+    ? await fs.mkdtemp(hostPlatform().runtimeTempPrefix) : null
   let fenced = null
   // The per-run home is chosen when a session starts and recorded on its
   // descriptor; a session begun in the shared home stays there.
@@ -470,7 +480,8 @@ export async function invoke ({
   let run
   try {
     const launch = fenced?.applied ? fenced.wrap(COMMAND(), args) : { command: COMMAND(), args }
-    run = await runProcess({ command: launch.command, args: launch.args, cwd, env, stdin: body, signal: invocationSignal, graceMs, maxBuffer, observe: events.hooks, reap: true })
+    run = await runProcess({ command: launch.command, args: launch.args, cwd, env, stdin: body, signal: invocationSignal, graceMs, maxBuffer, observe: events.hooks, reap: true, reapTag: meta.reapTag ?? null })
+    ran.run = run
   } catch (error) {
     if (error.kind === 'spawn-error' && error.started === false) {
       await record(ledgerDir, { invocationId, marker, phase: 'not-started', error: error.message, code: error.code, at: new Date().toISOString() })
@@ -563,7 +574,7 @@ export async function invoke ({
     response,
     usage,
     outcome: 'completed',
-    diagnostics: { durationMs: run.durationMs, cliVersion, events: events.count, tooling: tooling ? enforcement : null, hygiene: Boolean(hygiene),
+    diagnostics: { durationMs: run.durationMs, reap: run.leftovers?.scan ?? null, cliVersion, events: events.count, tooling: tooling ? enforcement : null, hygiene: Boolean(hygiene),
       fence: fence ? { namespace: fenced?.applied ? 1 : 0, reason: fenced?.reason ?? null, proof: fenced?.proof ?? null, mounts: fenced?.mounts ?? null, home: runHome ? 'per-run' : 'shared' } : null,
       ...(readOnlyTools ? { access: readSeat ? 'read' : 'none (fence not proved)' } : {}) }
   }

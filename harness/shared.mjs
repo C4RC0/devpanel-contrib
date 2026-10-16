@@ -279,6 +279,17 @@ export function cancelledError (termination) {
   return error
 }
 
+/**
+ * The runtime's descendant scan (process.mjs `leftovers.scan`) on an error
+ * raised after it ran: whether its escaped processes were proved gone is the
+ * engine's to judge (cleanup-barrier.mjs), whatever went wrong afterwards.
+ */
+export function withReap (error, run) {
+  const scan = run?.leftovers?.scan
+  if (scan && error && typeof error === 'object' && !error.reap) error.reap = scan
+  return error
+}
+
 /** A failed RUN is not a bad answer; the engine must never treat it as one. */
 export const runtimeError = (message, detail = {}) => new ProcessError(message, { kind: 'runtime-error', ...detail })
 

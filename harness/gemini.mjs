@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url'
 
 import { resolveCommand } from '../gui/server/runtime/command.mjs'
 import { runProcess, ProcessError } from '../gui/server/runtime/process.mjs'
-import { NL, installationProbe, probeModels, createLedger, lineObserver, cancelledError, runtimeError, childEnvironment } from './shared.mjs'
+import { NL, installationProbe, probeModels, createLedger, lineObserver, cancelledError, runtimeError, childEnvironment, withReap } from './shared.mjs'
+import { hostPlatform } from '../gui/server/runtime/platform.mjs'
 import { applyFence, assertFenced } from './fence.mjs'
 
 /*
@@ -109,10 +110,7 @@ const PROFILE_ROOT = () => process.env.DEVPANEL_GEMINI_PROFILE_ROOT ?? path.join
  * platform directory, so a wrong override only disables the pre-launch check —
  * the runtime's own warning and the missing acknowledgement still stop the turn.
  */
-export const systemConfigDir = () => process.env.DEVPANEL_GEMINI_SYSTEM_CONFIG_DIR ?? (
-  process.platform === 'darwin' ? '/Library/Application Support/GeminiCli'
-    : process.platform === 'win32' ? 'C:\\ProgramData\\gemini-cli'
-      : '/etc/gemini-cli')
+export const systemConfigDir = () => process.env.DEVPANEL_GEMINI_SYSTEM_CONFIG_DIR ?? hostPlatform().geminiSystemConfigDir
 const systemPoliciesDir = () => path.join(systemConfigDir(), 'policies')
 /** The system settings file the runtime would read (GEMINI_CLI_SYSTEM_SETTINGS_PATH wins, as in the runtime). */
 const hostSystemSettingsPath = (env) => env.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? path.join(systemConfigDir(), 'settings.json')
@@ -659,7 +657,16 @@ export async function probe ({ depth = 'installation', models = [], profile = 'd
 const { record, reconcile } = createLedger('gemini-ledger.jsonl')
 export { reconcile }
 
-export async function invoke ({
+/**
+ * One turn. An error raised after the runtime ran carries its descendant scan
+ * (shared.mjs withReap), so the engine never retries on unproved cleanup.
+ */
+export async function invoke (options) {
+  const ran = {}
+  try { return await invokeOnce(options, ran) } catch (error) { throw withReap(error, ran.run) }
+}
+
+async function invokeOnce ({
   session,
   model,
   effort,
@@ -686,7 +693,7 @@ export async function invoke ({
   // A coordinator turn that may read (Phase 1): Gemini's non-writer policy
   // (read tools, no shell) when a fence is requested, tool-free otherwise.
   readOnlyTools = false
-} = {}) {
+} = {}, ran = {}) {
   const invocationId = meta.invocationId ?? crypto.randomUUID()
   if (readOnlyTools && fenceSpec) supervisorOnly = false
 
@@ -888,8 +895,9 @@ export async function invoke ({
       run = await runProcess({
         command: launch.command,
         args: launch.args,
-        cwd, env, stdin: body, signal: invocationSignal, graceMs, maxBuffer, observe: events.hooks, reap: true
+        cwd, env, stdin: body, signal: invocationSignal, graceMs, maxBuffer, observe: events.hooks, reap: true, reapTag: meta.reapTag ?? null
       })
+      ran.run = run
     } catch (error) {
       if (error.kind === 'spawn-error' && error.started === false) {
         await record(ledgerDir, { invocationId, marker, phase: 'not-started', error: error.message, code: error.code, at: new Date().toISOString() })
@@ -991,6 +999,7 @@ export async function invoke ({
       outcome: 'completed',
       diagnostics: {
         durationMs: run.durationMs,
+        reap: run.leftovers?.scan ?? null,
         events: events.count,
         hygiene: Boolean(hygiene),
         fence: fenceSpec ? { namespace: fenced?.applied ? 1 : 0, reason: fenced?.reason ?? null, proof: fenced?.proof ?? null, mounts: fenced?.mounts ?? null } : null,

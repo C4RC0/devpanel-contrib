@@ -13,12 +13,14 @@ import { resolvePlaybook } from '../config/load.mjs'
 import { preflight, assertLaunchable } from '../config/preflight.mjs'
 import { systemClock } from './clock.mjs'
 import { baselineOf, escapingLinks, fingerprint, workspaceProjection } from './fingerprint.mjs'
-import { walkSelection, authorizer, knownProjectRoots, forbiddenRoots, copySelected, exportProject, SELECTION_RULE } from './selection.mjs'
+import { walkSelection, authorizer, knownProjectRoots, forbiddenRootsReport, copySelected, exportProject, SELECTION_RULE } from './selection.mjs'
 import { resolveProjectPath } from '../project-path.mjs'
 import { worktreeGitArgs, repositoryGitArgs, engineGitEnv, HARDENED, LOCAL_TRANSPORT } from './engine-git.mjs'
 import { Engine } from './engine.mjs'
 import { requireUnarchived } from '../issue-archive.mjs'
 import { acquire } from './lock.mjs'
+import { hostPlatform } from './platform.mjs'
+import { readBarrier, barrierRefusal } from './cleanup-barrier.mjs'
 import * as store from './store.mjs'
 import { classifyUntracked, describeBlocking, snapshotPathspec } from './working-tree.mjs'
 import { applyToSource, sourceTarget, bindSourceOwners } from './source-delivery.mjs'
@@ -460,8 +462,10 @@ export const gitWorktreeProvider = {
       if (selection) {
         // Selection v1: every target is authorized BEFORE anything is copied,
         // and each carries only what its owning repository would carry.
-        const authorize = authorizer({ known: await knownProjectRoots(), grants: policy.materializeGrants ?? [], forbidden: await forbiddenRoots() })
-        const record = { rule: SELECTION_RULE, consumerExcludes: [...excludes, ...toolingMounts], owners: [], skipped: [] }
+        const { roots: forbidden, mounts } = await forbiddenRootsReport()
+        const authorize = authorizer({ known: await knownProjectRoots(), grants: policy.materializeGrants ?? [], forbidden })
+        // How the container mounts were found (read, unreadable, not applicable on darwin).
+        const record = { rule: SELECTION_RULE, consumerExcludes: [...excludes, ...toolingMounts], owners: [], skipped: [], mounts }
         const plans = []
         try {
           for (const l of escaping) {
@@ -637,7 +641,11 @@ export async function reserveRun ({
   clock = systemClock,
   status = 'preflighting',
   expectConfigHash = null,
-  runOptions = {}
+  runOptions = {},
+  platform = hostPlatform(),
+  // Open cleanup entries the barrier file could not be written with (the
+  // supervisor holds them): they bar an in-place start like the file's own.
+  unrecordedBarrier = []
 }) {
   const resolution = await resolvePlaybook(playbookId, { root: configRoot, runOptions, projectId: issue?.project })
   if (!resolution.ok) {
@@ -683,8 +691,16 @@ export async function reserveRun ({
       if (previous?.journal?.recoveryRequired) throw Object.assign(new Error(`run ${previous.runId} requires event journal recovery before starting another run`), { status: 409 })
       if (previous?.integrity?.status === 'quarantined') throw Object.assign(new Error(`run ${previous.runId} requires a source integrity recovery disposition before starting another run`), { status: 409 })
     }
+    // An in-place workspace is the project checkout, which every issue shares:
+    // no new writer while a run's escaped descendants are unproved (cleanup-barrier.mjs).
+    if (resolution.resolved.workspace?.isolation === 'in-place') {
+      const refusal = barrierRefusal(await readBarrier(path.dirname(issuePath)), { unrecorded: unrecordedBarrier })
+      if (refusal) throw refusal
+    }
     const run = await store.initRun(issuePath, { runId, issue, resolved: resolution.resolved, clock, supervisorLaunchId })
     run.status = status
+    // The host it runs on, and what that host cannot do (platform.mjs).
+    run.host = platform.describe()
     run.preflight = {
       state: 'pending',
       depth: null,

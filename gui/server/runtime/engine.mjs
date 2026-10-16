@@ -12,7 +12,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { systemClock } from './clock.mjs'
-import { alive, ProcessError } from './process.mjs'
+import { alive, ProcessError, terminatePids } from './process.mjs'
+import { hostPlatform } from './platform.mjs'
+import { openCleanup, unprovedScan, cleanupEntry, proveEntries, cleanupRefusal, noteLostTags, addBarrierEntries, syncBarrier, readBarrier, barrierRefusal } from './cleanup-barrier.mjs'
 import { ownerLost } from './run-control.mjs'
 import { fingerprint, FINGERPRINT_RULE, LEGACY_FINGERPRINT_RULE, workspaceProjection } from './fingerprint.mjs'
 import { captureIntegrity, integrityChanges, readIntegrity, writeIntegrity } from './integrity.mjs'
@@ -789,7 +791,9 @@ const noopHooks = {}
 const relatedSnapshots = (ws) => (ws?.related ?? []).filter((r) => r.snapshot).map((r) => r.snapshot)
 
 export class Engine {
-  constructor ({ issuePath, runId, harnesses, steps: stepStore, clock = systemClock, hooks = noopHooks, emit = null, deliveryProvider = null, configRoot = undefined, availability = null }) {
+  constructor ({ issuePath, runId, harnesses, steps: stepStore, clock = systemClock, hooks = noopHooks, emit = null, deliveryProvider = null, configRoot = undefined, availability = null, platform = hostPlatform() }) {
+    // The host's OS probes (platform.mjs): the cleanup proof scans through it.
+    this.platform = platform
     this.deliveryProvider = deliveryProvider
     // Host-wide memory of exhausted models; optional, so tests and the CLI run without it.
     this.availability = availability
@@ -813,6 +817,55 @@ export class Engine {
   }
 
   async hook (name) { if (this.hooks[name]) await this.hooks[name](this) }
+
+  /** Open cleanup entries: escaped descendants not proved gone (cleanup-barrier.mjs). */
+  cleanupHold () { return openCleanup(this.run).length > 0 }
+
+  /** Keep a turn's unproved cleanup on the run; an in-place run also bars the shared checkout. */
+  async recordCleanup (entry) {
+    this.run.cleanup ??= { entries: [] }
+    this.run.cleanup.entries.push(entry)
+    if (this.run.workspace?.isolation === 'in-place') {
+      await addBarrierEntries(path.dirname(this.issuePath), { issueId: this.run.issue.id, runId: this.runId, checkout: this.run.workspace.path }, [entry])
+    }
+  }
+
+  /**
+   * Hand the workspace to nobody: no next turn, retry, replacement, check or
+   * delivery. Wins over a pause or anything else the same commit would start.
+   */
+  async blockForCleanup () {
+    this.run.status = 'blocked'
+    this.run.blockedReason = 'cleanup-unproved'
+    this.run.outcome = 'unresolved'
+    this.run.endedAt = this.clock.iso()
+    await this.persist({ type: 'cleanup-unproved', entries: openCleanup(this.run).map((e) => ({ role: e.role, tag: e.tag, reason: e.reason })) })
+  }
+
+  /**
+   * Scan each open entry's tag again (proveEntries). Survivors of a turn's own
+   * reaping are terminated and scanned once more; an owner-lost tag is only
+   * scanned. Anything left refuses, and the run stays as it is.
+   */
+  async proveCleanup ({ by = 'operator' } = {}) {
+    const open = openCleanup(this.run)
+    const at = this.clock.iso()
+    // Nothing open: the barrier must not hold this run either (a tag written
+    // there ahead of a run record that a crash then lost, proved since).
+    if (!open.length) return syncBarrier(path.dirname(this.issuePath), this.run, { at, by })
+    let still
+    try { still = await proveEntries(open, { platform: this.platform, at, terminate: terminatePids }) } catch (error) {
+      if (error.code === 'SCAN_UNAVAILABLE') await this.persist({ type: 'cleanup-still-unproved', reason: 'structural' })
+      throw error
+    }
+    const proved = open.filter((e) => e.provedAt)
+    if (proved.length) await syncBarrier(path.dirname(this.issuePath), this.run, { at, by })
+    if (still.length) {
+      await this.persist({ type: 'cleanup-still-unproved', tags: still.map((e) => e.tag) })
+      throw cleanupRefusal(still)
+    }
+    await this.persist({ type: 'cleanup-proved', tags: proved.map((e) => e.tag), by })
+  }
 
   /**
    * Adapter ledgers live in run metadata, outside the deliverable tree. Inside the
@@ -1168,6 +1221,9 @@ export class Engine {
       const pid = p.pendingInvocation?.activity?.pid
       if (pid && alive(-pid)) throw Object.assign(new Error(`${role}: process group ${pid} from the lost owner is still running; stop it before recovering`), { status: 409 })
     }
+    // The lost owner's turns left their reap tags on disk: scan them before
+    // anything is reconciled away (scan only; resume proves or refuses).
+    await noteLostTags(this.run, { platform: this.platform, projectDir: path.dirname(this.issuePath), at: this.clock.iso() })
     const lostAt = this.run.recovery.lastActivityAt ?? null
     const detectedAt = this.run.recovery.detectedAt ?? null
     await this.recover({ retryUncertain: true })
@@ -1282,6 +1338,8 @@ export class Engine {
         // Whether the seat fence held this turn, and if not, why (decision 8:
         // a turn that could not be fenced runs, visibly, as namespace 0).
         ...(pending.fence ? { fence: pending.fence } : {}),
+        // The runtime's descendant scan (process.mjs): proved, or why not.
+        ...(pending.reap ? { reap: pending.reap } : {}),
         // Operator instructions this turn's prompt carried (coordinator-chat.mjs).
         ...(pending.instructions ? { instructions: pending.instructions, instructionScope: pending.instructionScope } : {}),
         response
@@ -1416,6 +1474,7 @@ export class Engine {
    * target is recorded by closure as `unavailable`, never as a pass.
    */
   async maybeRunChecks ({ force = false, target: overrideTarget = null, tier = null } = {}) {
+    if (this.cleanupHold()) return
     if (['quarantined', 'abandoned'].includes(this.run.integrity?.status)) return
     // Checks rebuild the candidate from base plus patch; in place there is neither.
     if (this.run.workspace?.isolation === 'in-place') return
@@ -1850,6 +1909,9 @@ export class Engine {
       invocationId,
       startedAt: this.clock.iso(),
       marker: `devpanel:${this.runId}:${invocationId}`,
+      // The runtime's reap tag, on disk before the launch: a lost owner's
+      // escaped descendants can still be found by it (cleanup-barrier.mjs).
+      reapTag: crypto.randomUUID(),
       stepNumber: null,
       cursor: { phase: phase.id, stepId: step.id, round, attempt, ...(recheck ? { recheck } : {}), contract: step.output ?? null, recordsRevision: Boolean(step.recordsRevision), startedFromRevision: currentRevision ?? null },
       // What the runtime has been seen doing. Liveness, not progress: a tool call
@@ -1992,9 +2054,13 @@ export class Engine {
         outputSchema: step.output ?? null,
         signal: this.controller.signal,
         observe: { onActivity, onOutput, onSpawn },
-        meta: { invocationId, role, stepId: step.id, round, attempt }
+        meta: { invocationId, role, stepId: step.id, round, attempt, reapTag: pending.reapTag }
       }) } finally { await brokerTurn?.close().catch(() => {}) }
     } catch (error) {
+      // A runtime whose escaped descendants were not proved gone leaves the
+      // workspace unproved, whatever else went wrong (P3-3).
+      const lost = unprovedScan(error?.reap) ? error.reap : null
+      if (lost) await this.recordCleanup(cleanupEntry({ role, stepId: step.id, invocationId, scan: lost, at: this.clock.iso() }))
       // Account for the stopped turn before integrity can quarantine it. These
       // milliseconds belong to the agent, not to the subsequent filesystem scan.
       let abandonedMs = 0
@@ -2004,7 +2070,9 @@ export class Engine {
         this.run.timing = this.run.timing ?? { agentMs: 0, abandonedMs: 0, unknownSteps: 0 }
         this.run.timing.abandonedMs += abandonedMs
       }
-      forward('exit', error.name === 'AbortError' ? 'invocation aborted; the process group was terminated' : `invocation failed: ${error.message}`)
+      forward('exit', error.name === 'AbortError'
+        ? `invocation aborted; the process group was terminated${lost ? `, but escaped descendants could not be proved gone (${lost.status})` : ''}`
+        : `invocation failed: ${error.message}`)
       await activityWrite
       await liveWrite
       if (!await this.endIntegrity(role, pending, error.name === 'AbortError' ? 'cancelled' : 'failed', error.message)) {
@@ -2023,6 +2091,7 @@ export class Engine {
         await this.persist({
           type: byDeadline ? 'budget-exhausted' : 'cancelled',
           role, stepId: step.id, invocationId, abandonedMs,
+          ...(lost ? { cleanup: lost.status } : {}),
           budget: byDeadline ? 'wallClockMinutes' : undefined
         })
         return { cancelled: true, byDeadline }
@@ -2037,10 +2106,20 @@ export class Engine {
     // charging them to the agent would make every turn look slower than it was.
     pending.answeredAt = this.clock.iso()
     pending.usage = result.usage ?? null
+    pending.reap = result.diagnostics?.reap ?? null
     pending.fence = result.diagnostics?.fence ?? (this.snapshot.fence?.namespace === 1 && this.fenceSkipped ? { namespace: 0, reason: this.fenceSkipped } : null)
     forward('exit', `invocation completed (${result.outcome ?? 'completed'})`)
     await activityWrite
     await liveWrite
+    // An unproved reap scan is recorded and written before anything else is
+    // decided about the turn (an integrity block included), ahead of the commit
+    // that clears the pending invocation carrying its tag: a crash after that
+    // commit must not leave the cleanup unrecorded. The project barrier is
+    // written first, inside recordCleanup.
+    if (unprovedScan(pending.reap)) {
+      await this.recordCleanup(cleanupEntry({ role, stepId: step.id, invocationId, scan: pending.reap, at: this.clock.iso() }))
+      await this.saveRun()
+    }
     if (!await this.endIntegrity(role, pending, result.outcome ?? 'completed')) return { blocked: true }
 
     // Persisted with the invocation before any step exists, so a crash between
@@ -2056,6 +2135,15 @@ export class Engine {
     // "Advancing" is only bookkeeping for display; the true position is derived.
     this.run.phase = { id: phase.id, round, stepId: step.id }
     await this.persist()
+    // The answer is kept; the workspace goes to no one until its cleanup is
+    // proved. Inside a concurrent batch the run blocks once every sibling has
+    // settled (runConcurrently): blocked with a sibling still in flight, a lost
+    // owner would leave that sibling's tag to no recovery.
+    if (unprovedScan(pending.reap)) {
+      if (this.concurrentBatch) return { created }
+      await this.blockForCleanup()
+      return { created, blocked: true }
+    }
     return { created }
   }
 
@@ -2110,10 +2198,18 @@ export class Engine {
   }
 
   /** Keep the immutable launch snapshot and record explicit continuation allowances separately. */
-  async resumeExecution ({ budgets = {}, stoppedAt = null } = {}) {
+  async resumeExecution ({ budgets = {}, stoppedAt = null, unrecordedBarrier = [] } = {}) {
     await this.assertJournal()
     const refusal = resumeUnavailable(this.run)
     if (refusal) throw Object.assign(new Error(refusal), { status: 409 })
+    // Escaped descendants first: no writer resumes until they are proved gone
+    // or a person acknowledged them, nor onto a checkout another run bars
+    // (in the barrier file, or held by the supervisor when it could not be written).
+    await this.proveCleanup({ by: 'resume' })
+    if (this.run.workspace?.isolation === 'in-place') {
+      const barred = barrierRefusal(await readBarrier(path.dirname(this.issuePath)), { exceptRunId: this.runId, unrecorded: unrecordedBarrier })
+      if (barred) throw barred
+    }
     const checkpoint = await readIntegrity(this.integrityDir(), this.run.integrity.checkpoint)
     const current = await captureIntegrity(this.run.workspace, { clock: this.clock, trackedPaths: checkpoint.trackedPaths })
     if (current.hash !== checkpoint.hash) throw Object.assign(new Error('The retained workspace changed; resolve integrity before resuming.'), { status: 409 })
@@ -2375,13 +2471,17 @@ export class Engine {
     this.run.failures = this.run.failures ?? []
     const priorRetries = this.run.failures.filter((f) => f.cursorKey === cursorKey && f.retried).length
     // A rotated credential is retried once (failure.mjs), whatever the policy allows.
-    const willRetry = classified.retryable && priorRetries < Math.min(policy.maxAttempts, classified.maxRetries ?? Infinity)
+    // A turn whose cleanup is unproved is neither retried nor replaced: either
+    // would hand its workspace to a new writer (P3-3).
+    const cleanupBlocked = this.cleanupHold()
+    const willRetry = !cleanupBlocked && classified.retryable && priorRetries < Math.min(policy.maxAttempts, classified.maxRetries ?? Infinity)
     const record = {
       at: this.clock.iso(), role, stepId: step.id, round, attempt, invocationId: pending.invocationId, cursorKey,
       class: classified.class, retryable: classified.retryable, message: classified.message, evidence: classified.evidence,
       ...(classified.credentials ? { credentials: classified.credentials } : {}),
       model: spec?.model?.id ?? null, retried: willRetry, retryInMs: null, availability: null,
-      ...(reclassification ? { reclassification } : {})
+      ...(reclassification ? { reclassification } : {}),
+      ...(cleanupBlocked ? { cleanupUnproved: true } : {})
     }
     if (classified.class === 'quota' && this.availability && spec?.model?.id) {
       try {
@@ -2393,7 +2493,7 @@ export class Engine {
     // The verified-failed invocation is over either way: nothing pending remains.
     p.pendingInvocation = null
     p.state = p.session ? 'ready' : 'uninitialised'
-    if (classified.class === 'quota' && this.quotaFallback && !this.controller.signal.aborted) {
+    if (classified.class === 'quota' && this.quotaFallback && !cleanupBlocked && !this.controller.signal.aborted) {
       this.run.failures.push(record)
       await this.persist({ type: 'invocation-failed', ...record })
       let replacement = null
@@ -2423,6 +2523,10 @@ export class Engine {
       this.run.failure = { class: classified.class, message: classified.message, role, stepId: step.id, invocationId: pending.invocationId, retries: priorRetries, availability: record.availability, ...(record.credentials ? { credentials: record.credentials } : {}) }
       this.run.failures.push(record)
       await this.persist({ type: 'invocation-failed', ...record })
+      if (cleanupBlocked) {
+        if (!this.concurrentBatch) await this.blockForCleanup()
+        return { blocked: true }
+      }
       throw error
     }
     record.retryInMs = backoffMs(priorRetries + 1, { baseMs: policy.baseDelaySeconds * 1000, maxMs: policy.maxDelaySeconds * 1000, retryAfterMs: classified.retryAfterMs })
@@ -2542,10 +2646,20 @@ export class Engine {
    */
   async runConcurrently (batch) {
     await this.appendEvent({ type: 'concurrent-reviews', phase: batch[0].phase.id, round: batch[0].round, steps: batch.map((t) => ({ stepId: t.step.id, role: t.step.role, attempt: t.attempt })) })
-    const settled = await Promise.allSettled(batch.map((t) => this.runTurn(t)))
+    let settled
+    this.concurrentBatch = true
+    try { settled = await Promise.allSettled(batch.map((t) => this.runTurn(t))) } finally { this.concurrentBatch = false }
     const failure = settled.find((r) => r.status === 'rejected')
-    if (failure) throw failure.reason
     const outcomes = settled.map((r) => r.value ?? {})
+    if (failure?.reason?.injected) throw failure.reason
+    // A sibling's unproved cleanup blocks the run only now that none is in
+    // flight (a cancelled run stays cancelled, its entries open); a sibling's
+    // failure is already on the run's record.
+    if (this.cleanupHold() && !outcomes.some((o) => o.cancelled) && this.run.status !== 'cancelled') {
+      await this.blockForCleanup()
+      return { cancelled: false, blocked: true, retried: false }
+    }
+    if (failure) throw failure.reason
     return {
       cancelled: outcomes.some((o) => o.cancelled),
       blocked: outcomes.some((o) => o.blocked),
@@ -2664,6 +2778,8 @@ export class Engine {
         break
       }
 
+      // Escaped descendants not proved gone: no turn, check or delivery starts.
+      if (this.cleanupHold()) { await this.blockForCleanup(); break }
       if (await this.pauseAtBoundary()) break
 
       // A finished triage needs no further paid turn, even if the last answer

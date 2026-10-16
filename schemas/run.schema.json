@@ -107,7 +107,7 @@
         "string",
         "null"
       ],
-      "description": "Set whenever status is blocked \u2014 protocol-repair-exhausted, recovery-required, workspace-unavailable, checks-unavailable-but-required, closure-not-authorised."
+      "description": "Set whenever status is blocked \u2014 protocol-repair-exhausted, recovery-required, workspace-unavailable, checks-unavailable-but-required, closure-not-authorised, cleanup-unproved (a turn's escaped descendants were not proved gone; see cleanup)."
     },
     "startedAt": {
       "type": "string",
@@ -1125,6 +1125,15 @@
     "hostGuidance": {
       "type": "object",
       "description": "The installation's notes frozen into evidence/host-guidance/ at run start (runtime/host-guidance.mjs): dir, files, bytes, skipped."
+    },
+    "host": {
+      "type": "object",
+      "description": "The host the run was reserved on (runtime/platform.mjs describe()): platform, startTimePrecision (clock-tick | second), descendantScan (proved | unproved), unavailable capabilities and notApplicable ones."
+    },
+    "cleanup": {
+      "type": "object",
+      "description": "Escaped descendants not proved gone (runtime/cleanup-barrier.mjs): entries [{ role, stepId, invocationId, tag, reason (scan-incomplete | scan-unavailable | scan-structural | owner-lost), structural, scan, at, attempts?, provedAt?, acknowledgedAt?, acknowledgement? { by, at, reason } }]. A scan is { status (complete | incomplete | unavailable), method, tag, escaped, mechanism? ('unproved' where the host's scan is not proved, darwin: a complete parse still counts as complete), reason?, notInspected? }; structural entries are settled only by an acknowledgement. An entry with neither provedAt nor acknowledgedAt holds the run (blockedReason cleanup-unproved).",
+      "additionalProperties": true
     },
     "windowResetAfter": {
       "type": [

@@ -10,6 +10,8 @@ import { supportedActions, LIVE_STATUSES } from './supervisor.mjs'
 import { triageSuggestion } from './runtime/triage-suggestion.mjs'
 import { runResult } from './runtime/run-result.mjs'
 import { explainRun } from './runtime/run-explanation.mjs'
+import { ownerLiveness } from './runtime/lock.mjs'
+import { hostPlatform } from './runtime/platform.mjs'
 
 /*
  * Read-only views of runs.
@@ -69,12 +71,22 @@ export async function listRuns (issuePath) {
  * One run, assembled into the shape a timeline needs: every turn with its role,
  * model, prompt, response, structured output and revision.
  */
-export async function getRun (issuePath, runId, { issues, project, issueId, isActive = false }) {
+export async function getRun (issuePath, runId, { issues, project, issueId, isActive = false, platform = hostPlatform() }) {
   let run
   try {
     run = await store.readRun(issuePath, runId)
   } catch {
     throw err(404, 'no such run')
+  }
+  // A live-looking run this process is not driving, whose lock owner cannot be
+  // proved alive or dead: the explanation says so and names the lock.
+  let ownership = null
+  if (!isActive && LIVE_STATUSES.includes(run.status)) {
+    const file = path.join(issuePath, '.run.lock')
+    const lock = await fs.readFile(file, 'utf8').then(JSON.parse, () => null)
+    if (lock?.owner?.runId === runId && await ownerLiveness(lock.owner, { platform }) === 'unknown') {
+      ownership = { state: 'owner-unknown', pid: lock.owner.pid ?? null, host: lock.owner.host ?? null, file }
+    }
   }
 
   const [snapshot, outputs, prompts, events] = await Promise.all([
@@ -169,7 +181,7 @@ export async function getRun (issuePath, runId, { issues, project, issueId, isAc
     outcome: run.outcome,
     ...runResult(run, outputs),
     blockedReason: run.blockedReason,
-    explanation: explainRun(run, { outputs, active }),
+    explanation: explainRun(run, { outputs, active, ownership }),
     // Only what the backend will actually accept. A button for anything else
     // would promise something the server refuses.
     supportedActions: supportedActions(run, { active: isActive }),

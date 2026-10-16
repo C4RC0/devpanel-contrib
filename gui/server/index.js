@@ -734,6 +734,22 @@ app.delete('/api/projects/:project/issues/:id/runs/:runId', route(async (req, re
   res.json(result)
 }))
 
+// A run's escaped descendants were not proved gone (runtime/cleanup-barrier.mjs):
+// prove it again, or record a person's acknowledgement with the reason (OP-1).
+app.post('/api/projects/:project/issues/:id/runs/:runId/cleanup-proof', route(async (req, res) => {
+  const { project, id: issueId, runId } = req.params
+  const result = await supervisor.proveCleanup({ project, issueId, runId, actor: req.actor ?? req.body?.actor ?? 'operator' })
+  io.emit('issues:changed', { reason: 'run-cleanup-proved', project, id: issueId })
+  res.json(result)
+}))
+
+app.post('/api/projects/:project/issues/:id/runs/:runId/cleanup-acknowledgement', route(async (req, res) => {
+  const { project, id: issueId, runId } = req.params
+  const result = await supervisor.acknowledgeCleanup({ project, issueId, runId, reason: req.body?.reason, actor: req.actor ?? req.body?.actor ?? 'operator' })
+  io.emit('issues:changed', { reason: 'run-cleanup-acknowledged', project, id: issueId })
+  res.json(result)
+}))
+
 // An operator's record that the run's work was landed by hand (supervisor.markLanded).
 app.post('/api/projects/:project/issues/:id/runs/:runId/landed', route(async (req, res) => {
   const { project, id, runId } = req.params

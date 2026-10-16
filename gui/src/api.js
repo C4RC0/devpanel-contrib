@@ -154,6 +154,7 @@ export const api = {
   pauseRun: (project, id, runId) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/pause`, { method: 'POST' }),
   inspectIntegrity: (project, id, runId) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/integrity`),
   resolveIntegrity: (project, id, runId, body) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/integrity`, { method: 'POST', body: JSON.stringify(body) }),
+  acknowledgeCleanup: (project, id, runId, reason) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/cleanup-acknowledgement`, { method: 'POST', body: JSON.stringify({ reason }) }),
   recoverRun: (project, id, runId) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/recover`, { method: 'POST', body: JSON.stringify({}) }),
   resumeRun: (project, id, runId, budgets = {}) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/resume`, { method: 'POST', body: JSON.stringify({ budgets }) }),
   refreshChecks: (project, id, runId) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/refresh-checks`, { method: 'POST', body: JSON.stringify({}) }),

@@ -23,6 +23,9 @@ import {
 import { FINALIZABLE_BLOCKS } from './runtime/engine.mjs'
 import { reconcileUnavailable } from './runtime/source-reconcile.mjs'
 import { LockHeld, ownerLiveness, withLock } from './runtime/lock.mjs'
+import { hostPlatform } from './runtime/platform.mjs'
+import { terminatePids } from './runtime/process.mjs'
+import { openCleanup, noteLostTags, proveEntries, cleanupRefusal, readBarrier, liftBarrierEntries, syncBarrier, unrecordedCleanup, unrecordedRefusal } from './runtime/cleanup-barrier.mjs'
 import { createProbeExecutor } from './runtime/probe-budget.mjs'
 import { reconcileIntegration } from './runtime/integrate.mjs'
 import * as store from './runtime/store.mjs'
@@ -87,7 +90,9 @@ export function createSupervisor ({
   failureAdvisor = null,
   // Host-wide memory of exhausted models, beside the issues. One file for every
   // project: a quota burnt by one run is a quota burnt for all of them.
-  availabilityFile = path.join(issues.ISSUES_DIR ?? process.env.DEVPANEL_ISSUES_DIR ?? '.', '.availability.json')
+  availabilityFile = path.join(issues.ISSUES_DIR ?? process.env.DEVPANEL_ISSUES_DIR ?? '.', '.availability.json'),
+  // The host's OS probes (platform.mjs): lock liveness and the cleanup proof.
+  platform = hostPlatform()
 } = {}) {
   const availability = createAvailabilityStore(availabilityFile)
   /** Runs this process is driving, keyed by issue. At most one per issue. */
@@ -97,6 +102,39 @@ export function createSupervisor ({
   let shuttingDown = false
 
   const key = (project, issueId) => `${project}/${issueId}`
+
+  /*
+   * In-place runs whose open cleanup entries the project barrier file could not
+   * be written with, by project directory: admission stays closed on them all
+   * the same (P3-3), and every in-place admission tries the write again. The
+   * run records are what makes this durable: reconcile rebuilds the barrier
+   * from them at every start.
+   */
+  const unrecorded = new Map()
+  async function keepOnBarrier (projectDir, run) {
+    if (!run) return
+    const dir = path.resolve(projectDir)
+    const held = unrecorded.get(dir) ?? new Map()
+    try {
+      await syncBarrier(dir, run, { at: new Date().toISOString(), by: 'supervisor' })
+      held.delete(run.runId)
+    } catch (error) {
+      held.set(run.runId, { run, error: error.message })
+    }
+    if (held.size) unrecorded.set(dir, held)
+    else unrecorded.delete(dir)
+  }
+  /** The open entries held here for a project, after writing them again from the run's record as it is now. */
+  async function unrecordedBarrier (projectDir) {
+    const dir = path.resolve(projectDir)
+    for (const { run } of [...(unrecorded.get(dir)?.values() ?? [])]) {
+      const now = await store.readRun(path.join(dir, run.issue?.id ?? ''), run.runId).catch(() => null)
+      await keepOnBarrier(dir, now ?? run)
+    }
+    return [...(unrecorded.get(dir)?.values() ?? [])].flatMap(({ run, error }) => openCleanup(run).map((e) => ({
+      issueId: run.issue?.id ?? null, runId: run.runId, tag: e.tag, structural: e.structural, unrecorded: error
+    })))
+  }
 
   /**
    * The project's durable admission lock (Phase 4, R4-2): start, resume,
@@ -250,7 +288,8 @@ export function createSupervisor ({
         issuePath: issue.path,
         configRoot: root,
         expectConfigHash,
-        runOptions
+        runOptions,
+        unrecordedBarrier: await unrecordedBarrier(path.dirname(issue.path))
       })
     }) } catch (error) {
       starting.delete(k)
@@ -305,7 +344,7 @@ export function createSupervisor ({
       const latest = issue.latestRun
       if (!latest?.live) continue
       const owner = await lockOwner(issue.path, latest.runId)
-      if (owner.forThisRun && owner.liveness === 'alive') return { runId: latest.runId, issueId: issue.id }
+      if (owner.forThisRun && held(owner)) return { runId: latest.runId, issueId: issue.id }
     }
     return null
   }
@@ -466,7 +505,7 @@ export function createSupervisor ({
           return { runId, status: engine.run.status, recovered: false, reason: outcome.reason }
         }
       }
-      const decision = integrity ? { integrity: integrity.disposition } : recover ? { recovered: true } : resume ? await engine.resumeExecution({ budgets }) : continueRun ? await engine.continueRun({ text, actor, budgets }) : refreshChecks ? await engine.refreshClosureChecks(stagingTarget(await projectInfrastructure(project, { root: configRoot }))) : retryInput ? await engine.retryInputFailure() : await engine.answer({ text, actor, pauseId })
+      const decision = integrity ? { integrity: integrity.disposition } : recover ? { recovered: true } : resume ? await engine.resumeExecution({ budgets, unrecordedBarrier: await unrecordedBarrier(path.dirname(issue.path)) }) : continueRun ? await engine.continueRun({ text, actor, budgets }) : refreshChecks ? await engine.refreshClosureChecks(stagingTarget(await projectInfrastructure(project, { root: configRoot }))) : retryInput ? await engine.retryInputFailure() : await engine.answer({ text, actor, pauseId })
       // The worktree was handed back when the run paused; it is ours again.
       if (engine.run.workspace?.state === 'retained') {
         engine.run.workspace.state = 'active'
@@ -668,6 +707,109 @@ export function createSupervisor ({
     })
   }
 
+  /**
+   * The run whose cleanup is being settled, refused while live. `run` is null
+   * when its record is gone; `issuePath` is null when the issue itself is gone
+   * (deleted, or packed by archiving): its barrier entries are then all there
+   * is, and they are settled from their own metadata.
+   */
+  async function cleanupTarget ({ project, issueId, runId }) {
+    if (typeof runId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(runId)) throw err(400, 'Invalid run id')
+    if (typeof issueId !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(issueId) || issueId.startsWith('.')) throw err(400, 'Invalid issue id')
+    await issues.requireProject(project)
+    const projectDir = path.join(issues.ISSUES_DIR, project)
+    const issue = await issues.getIssue(project, issueId).catch((error) => { if (error.status === 404) return null; throw error })
+    if (!issue?.path) {
+      if (!unrecorded.get(path.resolve(projectDir))?.has(runId) && !(await readBarrier(projectDir)).entries.some((e) => e.issueId === issueId && e.runId === runId)) {
+        throw err(404, issue ? 'This issue is archived and its run has no barrier entry to settle.' : 'No such issue, and no barrier entry of this run remains.')
+      }
+      return { issuePath: null, projectDir, run: null }
+    }
+    if (active.get(key(project, issueId))?.runId === runId) throw err(409, 'This run is active here. Stop it and wait for it to settle first.')
+    const run = await store.readRun(issue.path, runId).catch((error) => { if (error.code === 'ENOENT') return null; throw error })
+    if (run && LIVE_STATUSES.includes(run.status)) throw err(409, 'The run still claims to be active. Stop it before settling its cleanup.')
+    const owner = await lockOwner(issue.path, runId)
+    if (owner.forThisRun && held(owner)) throw err(409, `The run's lock is held by ${owner.liveness === 'alive' ? 'a live process' : 'a process whose liveness cannot be established'}.`)
+    return { issuePath: issue.path, projectDir, run }
+  }
+
+  /*
+   * A person's word that a run's escaped descendants are gone (OP-1): the run's
+   * open cleanup entries and its barrier entries are lifted, recorded with who,
+   * when and why. The only way for a structural entry (darwin, OP-2). Refused
+   * while the run is live; a run whose record or issue is gone is settled from
+   * the barrier alone.
+   */
+  async function acknowledgeCleanup ({ project, issueId, runId, reason, actor = 'operator' }) {
+    const text = typeof reason === 'string' ? reason.trim() : ''
+    if (!text || text.length > 2000) throw err(400, 'A reason of at most 2000 characters is required: say what you checked.')
+    return admission(project, async () => {
+      const { issuePath, projectDir, run } = await cleanupTarget({ project, issueId, runId })
+      const at = new Date().toISOString()
+      const acknowledgement = { by: actor, at, reason: text }
+      let current = null
+      const tags = !run ? [] : await withLock(path.join(issuePath, '.run.lock'), { purpose: 'cleanup-acknowledgement', takeOverDead: false }, async () => {
+        current = await store.readRun(issuePath, runId)
+        const open = openCleanup(current)
+        for (const entry of open) Object.assign(entry, { acknowledgedAt: at, acknowledgement })
+        if (open.length) {
+          await store.writeRun(issuePath, runId, current)
+          await store.appendEvent(issuePath, runId, { type: 'cleanup-acknowledged', by: actor, reason: text, tags: open.map((e) => e.tag) })
+        }
+        return open.map((e) => e.tag)
+      })
+      // What this server held for the run because the barrier file refused it.
+      const dir = path.resolve(projectDir)
+      const heldTags = openCleanup(unrecorded.get(dir)?.get(runId)?.run).map((e) => e.tag)
+      unrecorded.get(dir)?.delete(runId)
+      if (!unrecorded.get(dir)?.size) unrecorded.delete(dir)
+      const lifted = await liftBarrierEntries(projectDir, { issueId, runId, type: 'acknowledged', by: actor, at, reason: text })
+      if (current) await keepOnBarrier(projectDir, current)
+      if (!tags.length && !lifted.length && !heldTags.length) throw err(409, 'Nothing to acknowledge: this run has no unproved cleanup.')
+      emit?.({ type: 'cleanup-acknowledged', project, issueId, runId })
+      return { runId, acknowledged: { ...acknowledgement, tags: [...new Set([...tags, ...lifted.map((e) => e.tag), ...heldTags])] } }
+    })
+  }
+
+  /**
+   * Prove a run's unproved cleanup on demand (Resume does it on its own): its
+   * tags are scanned again, survivors of its own reaping stopped. Refused where
+   * the entry is structural (darwin) or the scan unproved, and while the run is live.
+   */
+  async function proveCleanup ({ project, issueId, runId, actor = 'operator' }) {
+    return admission(project, async () => {
+      const { issuePath, projectDir, run } = await cleanupTarget({ project, issueId, runId })
+      const at = new Date().toISOString()
+      const settle = async (open) => {
+        if (!open.length) return { still: [], proved: [] }
+        const still = await proveEntries(open, { platform, at, terminate: terminatePids })
+        const proved = open.filter((e) => e.provedAt)
+        if (proved.length) await liftBarrierEntries(projectDir, { issueId, runId, tags: proved.map((e) => e.tag), type: 'proved', by: actor, at })
+        return { still, proved }
+      }
+      if (!run) {
+        // The run's record (or its issue) is gone: its barrier entries carry the tags.
+        const entries = (await readBarrier(projectDir)).entries.filter((e) => e.issueId === issueId && e.runId === runId).map((e) => ({ ...e }))
+        const { still, proved } = await settle(entries)
+        if (still.length) throw cleanupRefusal(still)
+        return { runId, proved: true, tags: proved.map((e) => e.tag) }
+      }
+      return withLock(path.join(issuePath, '.run.lock'), { purpose: 'cleanup-proof', takeOverDead: false }, async () => {
+        const current = await store.readRun(issuePath, runId)
+        const open = openCleanup(current)
+        let outcome
+        try { outcome = await settle(open) } finally { await store.writeRun(issuePath, runId, current) }
+        // Barrier entries of tags the record has settled (proved before, or
+        // written ahead of a record a crash lost) are lifted too.
+        await keepOnBarrier(projectDir, current)
+        const { still, proved } = outcome
+        await store.appendEvent(issuePath, runId, { type: still.length ? 'cleanup-still-unproved' : 'cleanup-proved', by: actor, tags: (still.length ? still : proved).map((e) => e.tag) })
+        if (still.length) throw cleanupRefusal(still)
+        return { runId, proved: true, tags: proved.map((e) => e.tag) }
+      })
+    })
+  }
+
   async function settleWorkspace (record) {
     const { engine, reservation } = record
 
@@ -679,6 +821,9 @@ export function createSupervisor ({
     }
 
     const run = engine.run
+    // A barrier write that failed during a turn leaves the entry on the run
+    // only: held here until the file takes it.
+    await keepOnBarrier(path.dirname(engine.issuePath), run)
 
     try {
       const verdict = await workspaceUnchanged(engine).catch((error) => ({
@@ -771,13 +916,13 @@ export function createSupervisor ({
     }
 
     const owner = await lockOwner(issue.path, runId)
-    if (owner.forThisRun && owner.liveness === 'alive' && !owner.mine) {
-      throw err(409, 'this run is driven by another process and cannot be stopped from here', {
+    if (owner.forThisRun && held(owner) && !owner.mine) {
+      throw err(409, owner.liveness === 'alive' ? 'this run is driven by another process and cannot be stopped from here' : 'the owner of this run cannot be established, so it cannot be stopped from here', {
         owner: { pid: owner.record?.owner?.pid ?? null, host: owner.record?.owner?.host ?? null }
       })
     }
 
-    const foreignLive = owner.liveness === 'alive' && !owner.mine
+    const foreignLive = held(owner) && !owner.mine
     const reconciled = await markUnowned(issue.path, run, owner, { releaseLock: !foreignLive })
     return {
       runId,
@@ -917,6 +1062,8 @@ export function createSupervisor ({
       return await withLock(path.join(issue.path, '.run.lock'), { purpose: 'run-delete', takeOverDead: false }, async () => {
         const run = await store.readRun(issue.path, runId)
         if (LIVE_STATUSES.includes(run.status) || run.status === 'paused') throw err(409, `The run is ${run.status}. Stop or abandon it before deleting.`)
+        // Its record may be the only durable copy of an unproved cleanup (the barrier file refused it).
+        if ((await unrecordedCleanup(path.dirname(issue.path), run)).length) throw err(409, unrecordedRefusal(run, 'deleting the run'), { code: 'CLEANUP_UNRECORDED' })
         await removeRunWorkspace(run, await resolveProjectPath(project, { projectsDir }).catch(() => null))
         let reservations = []
         try { reservations = JSON.parse(await fs.readFile(path.join(issue.path, '.step-reservations.json'), 'utf8')) } catch (e) { if (e.code !== 'ENOENT') throw e }
@@ -983,6 +1130,9 @@ export function createSupervisor ({
    * run it names. Reading it as evidence about a different run would leave a
    * stale run un-reconciled, and deleting it would strip a live owner of its lock.
    */
+  /** An owner proved alive, or one whose liveness cannot be established: never taken over. */
+  const held = (owner) => owner.liveness === 'alive' || owner.liveness === 'unknown'
+
   async function lockOwner (issuePath, runId = null) {
     const file = path.join(issuePath, '.run.lock')
     let record = null
@@ -991,10 +1141,13 @@ export function createSupervisor ({
     } catch {
       return { record: null, liveness: 'absent', mine: false, forThisRun: false }
     }
+    const liveness = await ownerLiveness(record.owner, { platform })
     return {
       record,
-      liveness: await ownerLiveness(record.owner),
-      mine: record.owner?.pid === process.pid,
+      liveness,
+      // Ours only when proved to be this very process: a pid equal to ours
+      // whose start time cannot be read could be an earlier holder of it.
+      mine: liveness === 'alive' && record.owner?.pid === process.pid,
       forThisRun: runId != null && record.owner?.runId === runId
     }
   }
@@ -1041,7 +1194,18 @@ export function createSupervisor ({
       run.workspace.state = 'retained'
       run.workspace.retainedReason = 'the owning process disappeared; the candidate is untouched'
     }
+    // The lost owner's turns left their reap tags on disk: scanned now, scan
+    // only. A tag that scans clean is proved; a survivor, or a scan that
+    // failed, stays open. A barrier write that fails is recorded on the run,
+    // never thrown (one run must not stop the reconcile of the next), and the
+    // supervisor holds the barrier itself until the write succeeds.
+    try {
+      await noteLostTags(run, { platform, projectDir: path.dirname(issuePath), at: new Date().toISOString() })
+    } catch (error) {
+      run.recovery.cleanupNoteFailed = { at: new Date().toISOString(), error: error.message }
+    }
     await store.writeRun(issuePath, run.runId, run)
+    await keepOnBarrier(path.dirname(issuePath), run)
 
     // A dead owner's lock must not keep the issue hostage — but only the lock
     // that belonged to THIS run, and only if nothing living is behind it.
@@ -1094,10 +1258,13 @@ export function createSupervisor ({
             const settled = await reconcileIntegration({ issuePath: issue.path, runId }).catch((error) => ({ error: error.message }))
             emit?.({ type: 'integration-reconciled', project: projectId, issueId: issue.id, runId, phase: settled.phase ?? null, error: settled.error ?? null })
           }
+          // The barrier as the run records say: open entries a failed write
+          // left off it are put back (or held here), settled ones lifted.
+          await keepOnBarrier(path.dirname(issue.path), run)
           if (!LIVE_STATUSES.includes(run.status)) continue
 
           const owner = await lockOwner(issue.path, runId)
-          const foreignLive = owner.liveness === 'alive' && !owner.mine
+          const foreignLive = held(owner) && !owner.mine
 
           // Live and holding the lock FOR THIS RUN: it genuinely belongs to
           // someone else, so leave it entirely alone.
@@ -1163,7 +1330,8 @@ export function createSupervisor ({
           const ownership = driving
             ? 'this-process'
             : owner.forThisRun && owner.liveness === 'alive' ? 'another-process'
-              : owner.liveness === 'alive' ? 'another-run' : 'unowned'
+              : owner.forThisRun && owner.liveness === 'unknown' ? 'owner-unknown'
+                : owner.liveness === 'alive' ? 'another-run' : 'unowned'
 
           const snapshot = await store.readSnapshot(issue.path, runId).catch(() => null)
 
@@ -1314,7 +1482,7 @@ export function createSupervisor ({
     return { questionId: first, state: 'asking' }
   }
 
-  return { chatHistory, instructCoordinator, askCoordinator: askCoordinatorQuestion, inquiryStatus, closeInquiry, reopenInquiry, packInquiry, start, answer, pause: pauseRun, resume: args => answer({ ...args, resume: true }), recover: args => answer({ ...args, recover: true }), resolveIntegrity: ({ disposition, expectedStateHash, reason, ...args }) => answer({ ...args, integrity: { disposition, expectedStateHash, reason } }), inspectIntegrity, retryInput: args => answer({ ...args, retryInput: true }), refreshChecks: args => answer({ ...args, refreshChecks: true }), continueRun: args => answer({ ...args, continueRun: true }), finalize, reconcileDelivery: args => finalize({ ...args, reconcile: true }), stop, abandon, deleteRun, markLanded, isActive, settle, reconcile, shutdown, liveAgents, active, availability, deliveryActions: worktreeDiffDelivery.actions }
+  return { chatHistory, acknowledgeCleanup, proveCleanup, instructCoordinator, askCoordinator: askCoordinatorQuestion, inquiryStatus, closeInquiry, reopenInquiry, packInquiry, start, answer, pause: pauseRun, resume: args => answer({ ...args, resume: true }), recover: args => answer({ ...args, recover: true }), resolveIntegrity: ({ disposition, expectedStateHash, reason, ...args }) => answer({ ...args, integrity: { disposition, expectedStateHash, reason } }), inspectIntegrity, retryInput: args => answer({ ...args, retryInput: true }), refreshChecks: args => answer({ ...args, refreshChecks: true }), continueRun: args => answer({ ...args, continueRun: true }), finalize, reconcileDelivery: args => finalize({ ...args, reconcile: true }), stop, abandon, deleteRun, markLanded, isActive, settle, reconcile, shutdown, liveAgents, active, availability, deliveryActions: worktreeDiffDelivery.actions }
 }
 
 /**
@@ -1328,6 +1496,7 @@ export function createSupervisor ({
  */
 export function workspaceDisposition (run, verdict) {
   if (run.workspace?.isolation === 'in-place') return { discard: false, reason: 'the workspace is the project checkout itself and is never removed' }
+  if (openCleanup(run).length) return { discard: false, reason: 'processes a turn started were not proved gone; the workspace is kept until the cleanup is proved or acknowledged' }
   if (run.delivery?.action === 'apply-to-source' && (!run.delivery.completedAt || run.delivery.application?.verified !== true)) {
     return { discard: false, reason: 'source delivery is not verified; retain the candidate for finalization or manual application' }
   }
@@ -1379,8 +1548,19 @@ function translate (error) {
   return error
 }
 
-/** What the backend will actually accept for a run in this state. */
+/**
+ * What the backend will actually accept for a run in this state. Settling an
+ * unproved cleanup comes first, whatever else the run offers (an abandoned run
+ * included): proving it where this host can scan, acknowledging it always.
+ */
 export function supportedActions (run, { active = false } = {}) {
+  const base = baseActions(run, { active })
+  const open = openCleanup(run)
+  if (!open.length || active || LIVE_STATUSES.includes(run.status)) return base
+  return [...(open.some((e) => e.structural) || !hostPlatform().descendantScan?.proved ? [] : ['prove-cleanup']), 'acknowledge-cleanup', ...base]
+}
+
+function baseActions (run, { active = false } = {}) {
   if (run.abandonment && run.status === 'cancelled') return ['start-new']
   // A restart, not a fault of the run: reconcile and continue, or give it up.
   if (!active && ownerLossRecoverable(run)) return ['recover', 'abandon']

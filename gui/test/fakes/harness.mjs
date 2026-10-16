@@ -140,7 +140,8 @@ export function createFakeHarness ({
       await ledger.append({ invocationId, marker, role, phase: 'cancelled', at: clock ? clock.iso() : new Date().toISOString() })
       throw error
     }
-    const { text, outcome = 'completed', delayTicks = 0 } = typeof produced === 'string' ? { text: produced } : produced
+    // `diagnostics` is what a real adapter reports beside the answer (its descendant scan, say).
+    const { text, outcome = 'completed', delayTicks = 0, diagnostics = null } = typeof produced === 'string' ? { text: produced } : produced
 
     // Time the turn "took", on the injected clock. Real duration would make an
     // assertion about measurement into an assertion about how fast this machine
@@ -182,7 +183,7 @@ export function createFakeHarness ({
       at: clock ? clock.iso() : new Date().toISOString()
     })
 
-    return { session: { id: sessionId }, response: text, usage: { turns: 1 }, outcome }
+    return { session: { id: sessionId }, response: text, usage: { turns: 1 }, outcome, ...(diagnostics ? { diagnostics } : {}) }
   }
 
   /**

@@ -483,6 +483,9 @@ async function runOne ({ command, cwd, dir, clock, signal, spawn }) {
     record.signal = out.signal
     record.timedOut = (out.cancelled && timeout.aborted && !(signal?.aborted)) || (remoteTimeout === true && out.code === 124)
     record.passed = out.code === 0 && !out.cancelled
+    // Check commands are not reaped: the record says no scan was made, which
+    // is not the same as a scan that found nothing.
+    record.descendants = out.leftovers?.scan ?? null
     // Bounded excerpts for reviewers (checkSummary passes them on): a command's
     // own digest leads its stdout; failures usually end its stderr. The whole
     // output stays in the log beside it.

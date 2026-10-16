@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises'
 import { runProcess } from './process.mjs'
+import { hostPlatform, platformFor } from './platform.mjs'
 
 /** Free Linux mount/namespace smoke test, not a model or Claude bridge probe. */
-export async function probeProjectSandbox ({ projectPath, allowedRoots = [], signal = null }, { execute = runProcess, platform = process.platform } = {}) {
-  if (platform !== 'linux') return { status: 'skip', message: 'Linux bubblewrap probe does not apply on this platform' }
+export async function probeProjectSandbox ({ projectPath, allowedRoots = [], signal = null }, { execute = runProcess, platform = hostPlatform().id } = {}) {
+  if (!platformFor(platform).bubblewrap) return { status: 'skip', message: 'Linux bubblewrap probe does not apply on this platform' }
   let scratch
   try {
     const roots = [...new Set(await Promise.all([projectPath, ...allowedRoots].map(root => fs.realpath(root))))]
