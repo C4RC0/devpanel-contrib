@@ -165,6 +165,7 @@ export function createSupervisor ({
    * named here would look, to a roster entry that references it, exactly like
    * one that was never written.
    */
+  const loadFailures = new WeakMap()   // loadHarnesses() result → { id: import error }
   async function loadHarnesses () {
     const adapters = {}
     let files = []
@@ -178,7 +179,12 @@ export function createSupervisor ({
     for (const file of files) {
       const id = file.slice(0, -4)
       if (['shared', 'fence', 'mcp-devpanel'].includes(id)) continue   // helpers and the broker's MCP shim, not runtimes
-      try { adapters[id] = await import(`${path.join(harnessDir, file)}?t=${Date.now()}`) } catch { /* not an adapter */ }
+      // The cache-buster reloads the adapter file only: what it imports
+      // (shared.mjs, gui/server/runtime/*) stays the copy this process loaded at
+      // start. An adapter updated on disk that needs a newer export from those
+      // therefore fails to import until the service restarts; the reason is kept
+      // so the probe can name it instead of reporting a missing adapter.
+      try { adapters[id] = await import(`${path.join(harnessDir, file)}?t=${Date.now()}`) } catch (error) { loadFailures.set(adapters, { ...loadFailures.get(adapters), [id]: error }) }
     }
     return adapters
   }
@@ -186,6 +192,8 @@ export function createSupervisor ({
   const probeFor = (harnesses) => createProbeExecutor({
     load: async (harnessId) => {
       const adapter = harnesses[harnessId]
+      const failure = loadFailures.get(harnesses)?.[harnessId]
+      if (!adapter && failure) throw new Error(`harness "${harnessId}" failed to load: ${failure.message} (an adapter changed on disk after the service started needs a restart: systemctl restart devpanel)`)
       if (!adapter) throw new Error(`no adapter for harness "${harnessId}"`)
       return adapter
     },
