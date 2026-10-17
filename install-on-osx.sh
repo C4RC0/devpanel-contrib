@@ -20,16 +20,25 @@
 #   DEVPANEL_PROJECTS_DIR  projects directory    (~/projects; each project is <name>-project)
 #   PORT / HOST            listen address        (8443 / 127.0.0.1)
 #   DEVPANEL_LAUNCHD_LABEL the agent's label     (an installed *.devpanel agent's own, else local.devpanel)
+#   DEVPANEL_UNFENCED      'acknowledged' opts this install in to unfenced operation, 'no' opts it
+#                          out; unset keeps what the installed agent has (off on a first install)
 #
 # Written for /bin/bash 3.2, the one macOS ships: no associative arrays, no mapfile.
 #
-# The seat fence is bubblewrap, which macOS does not have, so the agent runs with
-# DEVPANEL_FENCE=off: runs are recorded as unfenced (namespace 0, checks
-# local-unconfined) and seats are confined only by the CLIs' own sandboxes and
-# permission rules. That is the agreed first step; a Seatbelt fence comes later.
-# With the fence off the token no longer hides anything from the agents, so the
-# panel runs with DEVPANEL_AUTH=local: same-origin loopback requests need no
+# The seat fence is bubblewrap, which macOS does not have. Without it the panel
+# REFUSES seat turns, tooling commands and local checks (owner decision
+# 2026-10-13), until this install opts in, explicitly and per install:
+#   DEVPANEL_UNFENCED=acknowledged bash install-on-osx.sh
+# Then seats run unfenced: confined only by the CLIs' own sandboxes and
+# permission rules, recorded on every run (namespace 0, checks
+# local-unconfined, tooling unconfined) and flagged on every page of the panel.
+# The opt-in is kept in the agent's plist across reinstalls; DEVPANEL_UNFENCED=no
+# withdraws it. Gemini seats are refused on macOS either way. A Seatbelt fence
+# comes later.
+# The panel runs with DEVPANEL_AUTH=local: same-origin loopback requests need no
 # token (server/local-login.mjs); the token still works and guards the rest.
+# Risk: every local process is the operator then, unfenced seats and candidate
+# code included (they could read the token anyway); it is refused off loopback.
 
 set -euo pipefail
 
@@ -54,6 +63,17 @@ fi
 LABEL="${LABEL:-local.devpanel}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="$HOME/Library/Logs/devpanel.log"
+# The unfenced opt-in: given now, else what the installed agent already has.
+# An older agent's DEVPANEL_FENCE=off is not an opt-in: it was never asked for.
+UNFENCED="${DEVPANEL_UNFENCED:-}"
+if [[ -z "$UNFENCED" && -f "$PLIST" ]]; then
+  UNFENCED="$(/usr/libexec/PlistBuddy -c 'Print :EnvironmentVariables:DEVPANEL_UNFENCED' "$PLIST" 2>/dev/null || true)"
+fi
+case "$UNFENCED" in
+  acknowledged) ;;
+  no|'') UNFENCED='' ;;
+  *) die "DEVPANEL_UNFENCED is 'acknowledged' (opt in to unfenced seats) or 'no' (opt out), not '$UNFENCED'" ;;
+esac
 
 # --- environment -----------------------------------------------------------
 
@@ -174,9 +194,9 @@ cat > "$PLIST" <<EOF
     <key>PORT</key><string>$PORT</string>
     <key>HOST</key><string>$HOST</string>
     <key>DEVPANEL_PROJECTS_DIR</key><string>$PROJECTS</string>
-    <key>DEVPANEL_FENCE</key><string>off</string>
     <key>DEVPANEL_AUTH</key><string>local</string>
-    <key>DEVPANEL_SHUTDOWN_GRACE_MS</key><string>20000</string>
+${UNFENCED:+    <key>DEVPANEL_UNFENCED</key><string>acknowledged</string>
+}    <key>DEVPANEL_SHUTDOWN_GRACE_MS</key><string>20000</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -209,6 +229,12 @@ for _ in $(seq 1 30); do
     say "  stop:    launchctl bootout gui/$(id -u)/$LABEL"
     say "  projects go in $PROJECTS/<name>-project (each a git repository)"
     say "  log in once to each CLI if not yet done:  claude   and   codex login"
+    if [[ -n "$UNFENCED" ]]; then
+      warn "seats run UNFENCED (opted in): only the CLIs' own sandboxes confine them; DEVPANEL_UNFENCED=no withdraws it"
+    else
+      say "  seats are refused: macOS has no seat fence. To run them unfenced, opt in:"
+      say "    DEVPANEL_UNFENCED=acknowledged bash $DEST/install-on-osx.sh"
+    fi
     exit 0
   fi
   sleep 1

@@ -272,7 +272,7 @@ async function invokeOnce ({
     const early = resolveConnection({ profile, endpointRef, credentialRef, account, hygiene })
     fenced = early.error ? { applied: false, reason: early.error }
       : await applyFence({ spec: { ...fence, cwd: readOnlySource ? scratchDir : cwd }, manifest: await fenceManifest({ binary: COMMAND(), env: early.env, lastMessageDir: path.dirname(lastMessage) }), command: COMMAND(), signal })
-    if (!fenced.applied) { await fs.rm(path.dirname(lastMessage), { recursive: true, force: true }).catch(() => {}); assertFenced(fenced, { turn: 'a fenced Codex turn' }) }
+    if (!fenced.applied) { await fs.rm(path.dirname(lastMessage), { recursive: true, force: true }).catch(() => {}); assertFenced(fenced, { turn: 'a fenced Codex turn', mounts: fence.mounts ?? [] }) }
   }
   const readSeat = readOnlyTools && fenced?.applied === true
   if (readSeat) supervisorOnly = false

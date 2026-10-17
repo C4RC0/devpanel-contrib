@@ -4,7 +4,7 @@ import os from 'node:os'
  * Tokenless operator access for a single-user development install
  * (DEVPANEL_AUTH=local, set by install-on-osx.sh). Off unless asked for.
  *
- * Decision: on such an install the seat fence is off, so the agents can read
+ * Decision: on such an install there is no seat fence, so the agents can read
  * .devpanel-token anyway; the token keeps protecting only against the browser.
  * This keeps that part. A request is admitted as the account running the
  * panel only when it is plainly local and not cross-site:
@@ -18,7 +18,11 @@ import os from 'node:os'
  *
  * Pitfall: every local process (agents and candidate code included) is an
  * operator here. That is exactly what general §008 forbids on the panel hosts,
- * which is why it is opt-in and refused off loopback.
+ * which is why it is opt-in and refused off loopback. On macOS seats are
+ * refused unless the install also opted in to unfenced operation
+ * (DEVPANEL_UNFENCED=acknowledged, runtime/confinement-policy.mjs); once it
+ * has, an unfenced seat or the candidate code it runs can call this API as
+ * the operator (start runs, answer questions, deliver).
  */
 
 const LOOPBACK = ['127.0.0.1', '::1', 'localhost']

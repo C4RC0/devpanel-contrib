@@ -20,6 +20,7 @@ import { Engine } from './engine.mjs'
 import { requireUnarchived } from '../issue-archive.mjs'
 import { acquire } from './lock.mjs'
 import { hostPlatform } from './platform.mjs'
+import { fencePolicy, unfencedRecord } from './confinement-policy.mjs'
 import { readBarrier, barrierRefusal } from './cleanup-barrier.mjs'
 import * as store from './store.mjs'
 import { classifyUntracked, describeBlocking, snapshotPathspec } from './working-tree.mjs'
@@ -701,6 +702,10 @@ export async function reserveRun ({
     run.status = status
     // The host it runs on, and what that host cannot do (platform.mjs).
     run.host = platform.describe()
+    // A run on a host without the fence, under the install's opt-in, says so
+    // from its first record (confinement-policy.mjs; result.md, the run page).
+    const fence = fencePolicy({ platform })
+    if (fence.mode === 'unfenced') run.unfenced = unfencedRecord(fence, clock.iso())
     run.preflight = {
       state: 'pending',
       depth: null,
@@ -739,7 +744,9 @@ export async function recordPreflight (reservation, { state, result = null, usag
     summary: result
       ? `${result.failures?.length ?? 0} failure(s), ${result.unknowns?.length ?? 0} unproven`
       : run.preflight?.summary ?? null,
-    detail
+    detail,
+    // Unfenced operation, as preflight found it (macOS under its opt-in).
+    ...(result?.fence ? { fence: result.fence } : {})
   }
   await store.writeRun(issuePath, runId, run)
   return run
@@ -775,7 +782,8 @@ export async function provisionRun (reservation, {
   emit = null,
   deliveryProvider = null,
   configRoot,
-  availability = null
+  availability = null,
+  platform = hostPlatform()
 }) {
   const { runId, runLock, run, issuePath, clock } = reservation
   projectPath = await fs.realpath(projectPath)
@@ -845,7 +853,7 @@ export async function provisionRun (reservation, {
       }
     }
 
-    const engine = new Engine({ issuePath, runId, harnesses, steps: stepStore, clock, hooks, emit, deliveryProvider, configRoot, availability })
+    const engine = new Engine({ issuePath, runId, harnesses, steps: stepStore, clock, hooks, emit, deliveryProvider, configRoot, availability, platform })
     await engine.load()
     engine.baseline = baseline
     engine.workspaceProvider = engine.run.workspace?.isolation === 'in-place' ? inPlaceProvider : engine.run.workspace?.base?.policy === 'staged-release' ? directoryProvider : workspaceProvider
@@ -900,14 +908,16 @@ export async function startRun ({
   signal = null,
   runOptions = {},
   expectConfigHash = null,
-  availability = null
+  availability = null,
+  // The host's OS (platform.mjs); injectable so a test can be darwin.
+  platform = hostPlatform()
 }) {
-  const reservation = await reserveRun({ playbookId, issue, issuePath, configRoot, clock, runOptions, expectConfigHash })
+  const reservation = await reserveRun({ playbookId, issue, issuePath, configRoot, clock, runOptions, expectConfigHash, platform })
 
   let result = null
   let failure = null
   try {
-    result = await preflight(reservation.resolution.resolved, { probe, depth, root: configRoot, signal, projectPath })
+    result = await preflight(reservation.resolution.resolved, { probe, depth, root: configRoot, signal, projectPath, platform })
   } catch (error) {
     failure = error
   }
@@ -932,7 +942,7 @@ export async function startRun ({
 
   try {
     return await provisionRun(reservation, {
-      projectPath, harnesses, stepStore, workspaceProvider, hooks, emit, deliveryProvider, configRoot, availability
+      projectPath, harnesses, stepStore, workspaceProvider, hooks, emit, deliveryProvider, configRoot, availability, platform
     })
   } catch (error) {
     await abandonReservation(reservation, { blockedReason: `workspace-unavailable: ${error.message}` })

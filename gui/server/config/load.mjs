@@ -11,6 +11,8 @@ import { forbiddenRoots, PANEL_ROOT } from '../runtime/selection.mjs'
 import { targetErrors, resolveMounts } from '../runtime/tooling-mounts.mjs'
 import { resolveProjectPath } from '../project-path.mjs'
 import { DEFAULT_CONFIG_ROOT, hostConfigDir, discover } from './host-config.mjs'
+import { harnessRefusal } from '../runtime/confinement-policy.mjs'
+import { hostPlatform } from '../runtime/platform.mjs'
 
 /*
  * Configuration loading. Filesystem and validation only — nothing here invokes a
@@ -362,7 +364,7 @@ function checkWorkflow (strategy, errors) {
  * An unverified model is NOT a hard error — it resolves for preview and is
  * reported through liveExecution.blockers, which preflight enforces.
  */
-export async function resolvePlaybook (id, { root = CONFIG_ROOT, config = null, runOptions = {}, projectId = null } = {}) {
+export async function resolvePlaybook (id, { root = CONFIG_ROOT, config = null, runOptions = {}, projectId = null, platform = hostPlatform() } = {}) {
   const optionErrors = runOptionErrors(runOptions)
   if (optionErrors.length) return { ok: false, errors: optionErrors }
   const cfg = config ?? await loadConfig({ root })
@@ -427,6 +429,9 @@ export async function resolvePlaybook (id, { root = CONFIG_ROOT, config = null, 
     if (model.verification?.status !== 'verified') {
       blockers.push({ role, model: model.id, reason: 'roster entry is unverified', file: model.file })
     }
+    // A harness this host cannot confine (gemini on macOS): previewed, never run.
+    const refusal = harnessRefusal(model.harness, { platform })
+    if (refusal) blockers.push({ role, model: model.id, kind: 'platform-unsupported', reason: refusal, remedy: 'put this seat on a claude or codex model', file: model.file })
 
     participants[role] = {
       role,

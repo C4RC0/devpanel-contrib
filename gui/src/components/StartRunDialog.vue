@@ -418,7 +418,7 @@ async function start (override = false) {
                   <input type="checkbox" aria-label="Work directly in the project checkout" data-setting="isolation" :checked="inPlace" @change="setIsolation($event.target.checked)" />
                   Work directly in the project checkout
                 </span>
-                <small>{{ inPlace ? 'No isolated worktree and no patch: edits land in the live tree as they are made, and a failed turn can leave partial edits there. The base setting below does not apply.' : 'An isolated git worktree cut from the base below. The result is a verified patch; the repository changes only when you integrate it.' }}{{ configuredIsolation === 'in-place' ? ' This playbook defaults to working in place.' : '' }}</small>
+                <small>{{ inPlace ? 'No isolated worktree and no patch: edits land in the live tree as they are made, and a failed turn can leave partial edits there. The base setting below does not apply. A project that declares tooling mounts is refused in place (nothing binds them there): run it isolated.' : 'An isolated git worktree cut from the base below. The result is a verified patch; the repository changes only when you integrate it.' }}{{ configuredIsolation === 'in-place' ? ' This playbook defaults to working in place.' : '' }}</small>
               </label>
               <label class="setting setting--wide" :class="{ 'setting--inactive': !priorRuns }">
                 <span>Earlier runs</span>

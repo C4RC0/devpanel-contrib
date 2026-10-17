@@ -10,6 +10,7 @@ import { runProcess, ProcessError } from '../gui/server/runtime/process.mjs'
 import { NL, installationProbe, probeModels, createLedger, lineObserver, cancelledError, runtimeError, childEnvironment, withReap } from './shared.mjs'
 import { hostPlatform } from '../gui/server/runtime/platform.mjs'
 import { applyFence, assertFenced } from './fence.mjs'
+import { harnessRefusal } from '../gui/server/runtime/confinement-policy.mjs'
 
 /*
  * Gemini CLI adapter.
@@ -692,9 +693,15 @@ async function invokeOnce ({
   fence: fenceSpec = null,
   // A coordinator turn that may read (Phase 1): Gemini's non-writer policy
   // (read tools, no shell) when a fence is requested, tool-free otherwise.
-  readOnlyTools = false
+  readOnlyTools = false,
+  // The host's OS (platform.mjs); injectable so a test can be darwin.
+  platform = hostPlatform()
 } = {}, ran = {}) {
   const invocationId = meta.invocationId ?? crypto.randomUUID()
+  // Before anything is written, probed or launched: every Gemini seat is
+  // refused on a host without bubblewrap (owner decision 3), whoever calls.
+  const refusal = harnessRefusal(id, { platform })
+  if (refusal) throw new ProcessError(refusal, { kind: 'environment-error', started: false, invocationId })
   if (readOnlyTools && fenceSpec) supervisorOnly = false
 
   // Declared unsupported, so being asked for one is a configuration fault, not
@@ -887,7 +894,7 @@ async function invokeOnce ({
     // sandbox included (it then binds within the fenced view).
     fenced = fenceSpec ? await applyFence({ spec: { ...fenceSpec, cwd }, command: COMMAND(), signal,
       manifest: await fenceManifest({ binary: COMMAND(), env, writable: [policyDir, ...(runtimeTemp ? [runtimeTemp] : [])] }) }) : null
-    assertFenced(fenced, { turn: 'a fenced Gemini turn' })
+    assertFenced(fenced, { turn: 'a fenced Gemini turn', mounts: fenceSpec?.mounts ?? [] })
     const inner = { command: sandboxArgv ? BWRAP() : COMMAND(), args: sandboxArgv ? [...sandboxArgv, '--', COMMAND(), ...args] : args }
     const launch = fenced?.applied ? fenced.wrap(inner.command, inner.args) : inner
     let run

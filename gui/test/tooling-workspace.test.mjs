@@ -148,29 +148,32 @@ export default async function (t) {
       t.eq('the run fails as an environment fault', engine.run.failure?.class, 'environment', JSON.stringify(engine.run.failure))
       t.ok('naming the source and the project file', engine.run.failure?.message.includes(source) && engine.run.failure.message.includes('projects/devpanel-project.yaml'), engine.run.failure?.message)
       t.ok('no seat with tools was invoked', !turns.some((tn) => tn.stepId === 'implement' || tn.stepId.startsWith('audit')))
+      // The runner's DEVPANEL_FENCE=off binds nothing, so nothing may look mounted (P3-1, P3-2).
+      t.eq('and no empty mount point was made in the worktree', await exists(path.join(engine.run.workspace.path, 'tools', 'fake')), false)
     }
 
-    t.section('5. the brief, the author and the audit are given every declared command in the rendered form (AC2b)')
+    t.section('5. without the fence (the runner\'s DEVPANEL_FENCE=off) every seat is given the same commands, unwrapped and labelled unconfined (P2-2, P2-3, P2-4)')
     {
       const turns = []
       const script = scriptFor()
       const f = await engineFixture({ script: (turn) => { turns.push(turn); return script(turn) } })
-      const source = await toolDir()
       const commands = [{ id: 'unit', run: 'node test/run.mjs <suite>', description: 'unit suites' }, { id: 'fmt', cwd: 'docs', run: "prettier --check '<files>'", provisional: true }]
-      await writeProject(f.configRoot, { mounts: [{ target: 'tools/fake', source }], commands })
+      await writeProject(f.configRoot, { commands })
       const engine = await start(f)
       await engine.drive()
       const worktree = engine.run.workspace.path
-      const lines = commands.map((c) => renderToolingCommand(c, worktree))
+      const lines = commands.map((c) => renderToolingCommand(c, worktree, { offline: false }))
       const author = turns.find((tn) => tn.stepId === 'implement')
       const audit = turns.find((tn) => tn.stepId.startsWith('audit'))
       const brief = turns.find((tn) => tn.stepId.startsWith('brief'))
       for (const [label, turn] of [['the author', author], ['the audit', audit], ['the coordinator\'s brief', brief]]) {
-        t.ok(`${label} is given every command exactly as rendered`, Boolean(turn) && lines.every((l) => turn.prompt.includes(l)), turn?.prompt.slice(-1500))
+        t.ok(`${label} is given every command exactly as rendered, without the wrapper`, Boolean(turn) && lines.every((l) => turn.prompt.includes(l)), turn?.prompt.slice(-1500))
+        t.ok(`${label} is told they run unconfined, and why`, Boolean(turn) && turn.prompt.includes('UNCONFINED') && turn.prompt.includes('DEVPANEL_FENCE=off'))
+        t.ok(`${label} never sees the Linux wrapper or a claim of no network`, Boolean(turn) && !turn.prompt.includes('/run/devpanel/tooling/offline') && !turn.prompt.includes('have no network') && !turn.prompt.includes('network isolation'))
         t.ok(`${label} is told "could not run" needs the quoted attempt`, Boolean(turn) && turn.prompt.includes('could not run'))
-        t.ok(`${label} never sees a "--" after the wrapper`, Boolean(turn) && !turn.prompt.includes('/run/devpanel/tooling/offline --'))
       }
-      t.ok('the author is told what is mounted', Boolean(author) && author.prompt.includes(`tools/fake (from ${source})`))
+      const step = engine.run.steps.find((s) => s.stepId === 'implement')
+      t.eq('the author\'s step records its commands as unconfined (run evidence)', step?.tooling, { commands: 'unconfined', ids: ['unit', 'fmt'], reason: 'the seat fence is switched off (DEVPANEL_FENCE=off)' })
       const confirm = turns.find((tn) => tn.stepId === 'confirm')
       if (confirm) t.ok('so is the closure confirmation', lines.every((l) => confirm.prompt.includes(l)))
     }

@@ -229,7 +229,7 @@ export default async function (t) {
       const ws = await gitWorktreeProvider.create({ projectPath: f.projectPath, runId: 'fence-engine', root: f.issuePath, policy: { base: 'head' } })
       await fs.writeFile(path.join(ws.path, 'source.txt'), 'edited\n')
       const runScratch = path.join(f.issuePath, 'scratch'); await fs.mkdir(runScratch, { recursive: true })
-      const self = { toolingMounts: Engine.prototype.toolingMounts, snapshot: { fence: { namespace: 1 } }, run: { workspace: { ...ws, scratchPath: runScratch, source: { repository: await fs.realpath(path.join(f.projectPath, '.git')) } } } }
+      const self = { toolingMounts: Engine.prototype.toolingMounts, hostFence: Engine.prototype.hostFence, snapshot: { fence: { namespace: 1 } }, run: { workspace: { ...ws, scratchPath: runScratch, source: { repository: await fs.realpath(path.join(f.projectPath, '.git')) } } } }
       const saved = process.env.DEVPANEL_FENCE
       delete process.env.DEVPANEL_FENCE
       let engineSpec

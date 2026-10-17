@@ -76,8 +76,8 @@ function indexSteps (phases) {
  * @param issue    optional issue descriptor, so issue-scoped placeholders resolve
  * @param project  optional { id, path }
  */
-export async function previewRun ({ playbookId, configRoot, issue = null, project = null, deliveryActions = null, runOptions = {} } = {}) {
-  const resolution = await resolvePlaybook(playbookId, { root: configRoot, runOptions, projectId: project?.id ?? issue?.project })
+export async function previewRun ({ playbookId, configRoot, issue = null, project = null, deliveryActions = null, runOptions = {}, platform = undefined } = {}) {
+  const resolution = await resolvePlaybook(playbookId, { root: configRoot, runOptions, projectId: project?.id ?? issue?.project, platform })
   if (!resolution.ok) return { ok: false, errors: resolution.errors }
 
   const r = resolution.resolved
@@ -160,7 +160,7 @@ export async function previewRun ({ playbookId, configRoot, issue = null, projec
   // --- prerequisites ------------------------------------------------------
   const prerequisites = []
   for (const b of r.liveExecution.blockers) {
-    prerequisites.push({ category: 'blocking', kind: b.model ? 'unverified-model' : 'release-configuration', detail: b.model ? `${b.role}: ${b.model} ${b.reason}. Verify the roster entry before starting.` : b.reason, file: b.file })
+    prerequisites.push({ category: 'blocking', kind: b.kind ?? (b.model ? 'unverified-model' : 'release-configuration'), detail: b.kind ? `${b.role}: ${b.model} — ${b.reason}. ${b.remedy ?? ''}`.trim() : b.model ? `${b.role}: ${b.model} ${b.reason}. Verify the roster entry before starting.` : b.reason, file: b.file })
   }
   if (r.checks.requirement === 'required' && !r.checks.target) {
     prerequisites.push({ category: 'blocking', kind: 'checks-unsatisfiable', detail: 'Checks are required, but no check target is configured. Configure a target before starting.' })

@@ -324,7 +324,7 @@ async function invokeOnce ({
       if (!await fs.lstat(placeholder).then(() => true, () => false)) await fs.writeFile(placeholder, '', { mode: 0o600 })
     }
     fenced = early.error ? { applied: false, reason: early.error } : await applyFence({ spec: { ...fence, cwd }, manifest: await fenceManifest({ binary: COMMAND(), env: early.env, runtimeTemp, runHome }), command: COMMAND(), signal })
-    if (!fenced.applied && !session?.home) assertFenced(fenced, { turn: 'a fenced Claude turn' })
+    if (!fenced.applied && !session?.home) assertFenced(fenced, { turn: 'a fenced Claude turn', mounts: fence.mounts ?? [] })
     if (!fenced.applied && runHome) {
       if (session?.home) {
         if (runtimeTemp) await fs.rm(runtimeTemp, { recursive: true, force: true })

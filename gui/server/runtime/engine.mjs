@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { systemClock } from './clock.mjs'
 import { alive, ProcessError, terminatePids } from './process.mjs'
 import { hostPlatform } from './platform.mjs'
+import { fencePolicy, unfencedRecord } from './confinement-policy.mjs'
 import { openCleanup, unprovedScan, cleanupEntry, proveEntries, cleanupRefusal, noteLostTags, addBarrierEntries, syncBarrier, readBarrier, barrierRefusal } from './cleanup-barrier.mjs'
 import { ownerLost } from './run-control.mjs'
 import { fingerprint, FINGERPRINT_RULE, LEGACY_FINGERPRINT_RULE, workspaceProjection } from './fingerprint.mjs'
@@ -1350,6 +1351,8 @@ export class Engine {
         // Whether the seat fence held this turn, and if not, why (decision 8:
         // a turn that could not be fenced runs, visibly, as namespace 0).
         ...(pending.fence ? { fence: pending.fence } : {}),
+        // How the turn's declared commands were given when not inside the fence.
+        ...(pending.tooling ? { tooling: pending.tooling } : {}),
         // The runtime's descendant scan (process.mjs): proved, or why not.
         ...(pending.reap ? { reap: pending.reap } : {}),
         // Operator instructions this turn's prompt carried (coordinator-chat.mjs).
@@ -1388,13 +1391,21 @@ export class Engine {
    * whole before launch.
    */
   async fenceSpec ({ coordinationOnly, tooling, scratchDir }) {
+    // Without the fence (DEVPANEL_FENCE=off, or macOS under its opt-in;
+    // confinement-policy.mjs) the turn runs as namespace 0 and the step
+    // records why. Declared mounts were refused before this (assertMountsBound).
+    // macOS records it on every run, one resolved before the fence included.
+    const policy = this.hostFence()
+    if (policy.mode === 'unfenced') {
+      this.fenceSkipped = policy.reason
+      this.run.unfenced ??= unfencedRecord(policy, this.clock.iso())
+      return null
+    }
     if (this.snapshot.fence?.namespace !== 1) return null
-    // Checked before the fence switch: a seat told it may run the project's
+    if (policy.mode !== 'fence') { this.fenceSkipped = policy.reason; return null }
+    // Checked before anything else: a seat told it may run the project's
     // tooling is refused a turn without it, whatever else holds.
     const tool = coordinationOnly ? {} : await this.toolingMounts()
-    // An operator switch (and the test suite's default): the turn runs as
-    // before, and the step records that the fence was switched off.
-    if (process.env.DEVPANEL_FENCE === 'off') { this.fenceSkipped = 'switched off (DEVPANEL_FENCE=off)'; return null }
     const panelRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
     this.fenceSkipped = null
     if (coordinationOnly) return { cwd: scratchDir, writable: [scratchDir], readOnly: [], entries: [], panelRoot }
@@ -1427,6 +1438,8 @@ export class Engine {
 
   /** A reading triage turn's fence: the worktree and source `.git` read-only, its scratch writable. */
   async readFenceSpec (scratchDir) {
+    // Only ever chosen inside the fence (`fenceable`); never a mount point without one.
+    if (this.hostFence().mode !== 'fence') throw new ProcessError(`a reading turn needs the seat fence: ${this.hostFence().reason}`, { kind: 'environment-error', started: false })
     const tool = await this.toolingMounts()
     const ws = this.run.workspace
     const panelRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
@@ -1442,7 +1455,8 @@ export class Engine {
    * resolved into the snapshot): every source must exist, or the turn is
    * refused naming it (AC1b), and every target becomes an empty directory in
    * the worktree without following a link out of it (tooling-mounts.mjs).
-   * An in-place run works in the checkout, where the tooling already is.
+   * Only for a fenced, isolated turn: anywhere else assertMountsBound has
+   * already refused a project that declares mounts.
    */
   async toolingMounts () {
     const t = this.snapshot.workspace?.tooling ?? {}
@@ -1457,6 +1471,43 @@ export class Engine {
     }
     const panelRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
     return { mounts, toolingBin: path.join(panelRoot, 'harness', 'tooling') }
+  }
+
+  /** What this host may run (confinement-policy.mjs), with the engine's platform. */
+  hostFence () {
+    return fencePolicy({ platform: this.platform })
+  }
+
+  /**
+   * A seat with tools in a project that declares tooling mounts runs only
+   * where a proved fence binds them read-only: a fenced, isolated turn of a
+   * run resolved under the seat fence. Anywhere else (fence off, macOS, an
+   * in-place run, a run from before the fence) the turn is refused before any
+   * mount point is created or the CLI starts, naming the mount (P3-1). An
+   * in-place run of such a project is therefore refused; run it isolated.
+   */
+  assertMountsBound ({ coordinationOnly }) {
+    const mounts = this.snapshot.workspace?.tooling?.mounts ?? []
+    if (coordinationOnly || !mounts.length) return
+    const policy = this.hostFence()
+    const ws = this.run.workspace
+    const why = policy.mode !== 'fence' ? policy.reason
+      : ws?.isolation === 'in-place' || !ws?.path ? 'in-place run: the workspace is the live checkout, where nothing is bound'
+        : this.snapshot.fence?.namespace !== 1 ? 'this run was resolved before the seat fence'
+          : null
+    if (!why) return
+    const m = mounts[0]
+    throw new ProcessError(`tooling mount ${m.target} (from ${m.source}) cannot be bound read-only in this turn: ${why}. Only a proved Linux seat fence binds a declared mount (workspace.tooling.mounts in projects/${this.run.issue.project}.yaml); this project's seat turns are refused while it declares one here (an isolated run on a fenced Linux host binds it)`,
+      { kind: 'environment-error', started: false })
+  }
+
+  /** How this turn's declared commands are given: null inside the fence, else unconfined or refused (tooling-commands.mjs). */
+  toolingConfinement () {
+    const policy = this.hostFence()
+    const inPlace = this.run.workspace?.isolation === 'in-place'
+    if (policy.mode === 'fence' && !inPlace) return null
+    if (policy.mode === 'refused') return { mode: 'refused', reason: policy.reason }
+    return { mode: 'unconfined', reason: policy.mode === 'off' ? 'the seat fence is switched off (DEVPANEL_FENCE=off)' : policy.mode === 'unfenced' ? policy.reason : 'in-place run: the workspace is the live checkout, outside any fence' }
   }
 
   /** The tooling policy for this run, with the live checkout named. */
@@ -1532,7 +1583,8 @@ export class Engine {
       gitDir: this.run.workspace.gitDir ?? null,
       runDir: store.runDir(this.issuePath, this.runId),
       clock: this.clock,
-      signal: this.controller.signal
+      signal: this.controller.signal,
+      platform: this.platform
     }
     // The baseline: the same target (of a tier: the same tier) on the base
     // commit (the source revision), once per run and target, reused by later
@@ -1679,8 +1731,10 @@ export class Engine {
     // Phase 1: a coordination-only step marked `access: read` may read the run's
     // source snapshot inside the seat fence. The adapter keeps it tool-free when
     // the fence cannot be proved, so this only ever adds reading, never exposure.
+    // Only inside the fence: elsewhere (fence off, macOS) such a turn takes
+    // fenceSpec's coordination-only path, refused or tool-free namespace 0.
     const fenceable = coordinationOnly && this.snapshot.fence?.namespace === 1 &&
-      process.env.DEVPANEL_FENCE !== 'off' && Boolean(this.run.workspace?.path) && this.run.workspace.isolation !== 'in-place'
+      this.hostFence().mode === 'fence' && Boolean(this.run.workspace?.path) && this.run.workspace.isolation !== 'in-place'
     const readAccess = fenceable && step.access === 'read'
     // `access: checks` (the closure confirmation): the coordinator's own turn,
     // session and working directory, plus read-only tools over the run's check
@@ -1827,9 +1881,9 @@ export class Engine {
       // What the seats can run (projects/<id>.yaml workspace.tooling.commands):
       // a brief or a confirmation that accepts "could not run" for a listed
       // command without the quoted attempt is accepting less than was possible.
-      // In place there is no fence, so no mounts and no wrapper to name.
-      if (['handoff', 'closureConfirmation'].includes(step.output) && this.run.workspace?.isolation !== 'in-place') {
-        const brief = toolingBrief({ tooling: this.snapshot.workspace?.tooling, worktree: this.run.workspace?.path ?? '' })
+      // In place there is no fence: the commands are given unconfined.
+      if (['handoff', 'closureConfirmation'].includes(step.output)) {
+        const brief = toolingBrief({ tooling: this.snapshot.workspace?.tooling, worktree: this.run.workspace?.path ?? '', confinement: this.toolingConfinement() })
         if (brief) append('tooling-commands', `${brief}${NL}Hold the seats to this: a report that a listed command could not be run must quote the attempted command line and its output.`)
       }
       if (['staging', 'deployment'].includes(this.snapshot.tactic)) {
@@ -1872,7 +1926,7 @@ export class Engine {
       append('related', `Related projects, read-only snapshots taken at the start of this run (not part of the candidate; a change they need is a finding or a follow-up, never an edit): ${related.map((r) => `${r.project} at ${r.snapshot} (${r.reason})`).join('; ')}.`)
     }
     if (tooling && !coordinationOnly) {
-      const brief = this.run.workspace.isolation === 'in-place' ? null : toolingBrief({ tooling: this.snapshot.workspace?.tooling, worktree: this.run.workspace.path, shell: this.snapshot.participants[role]?.model.harness !== 'gemini' })
+      const brief = toolingBrief({ tooling: this.snapshot.workspace?.tooling, worktree: this.run.workspace.path, shell: this.snapshot.participants[role]?.model.harness !== 'gemini', confinement: this.toolingConfinement() })
       if (brief) append('tooling-commands', brief)
       append('tooling', `Source workspace: ${this.run.workspace.path}. ${tooling.writesCode ? 'You may edit and stage source; do not change Git HEAD or create commits.' : 'Source and Git state are read-only for your role. Write temporary files and output only in the scratch directory.'}${tooling.allowedRoots.length ? ` You may also read ${tooling.allowedRoots.join(', ')}.` : ''} ${tooling.allowLiveCheckout ? 'You may read the project\'s live checkout.' : `Do not read or run anything from the project's live checkout${tooling.liveCheckout ? ` at ${tooling.liveCheckout}` : ''}: tooling loaded from there is code outside the candidate.`}`)
     }
@@ -1919,9 +1973,14 @@ export class Engine {
       at: this.clock.iso()
     }
 
+    // Commands given without the fence are labelled on the step as well as in
+    // the prompt: unconfined, or refused (tooling-commands.mjs).
+    const toolingMode = appended.some((a) => a.reason === 'tooling-commands') ? this.toolingConfinement() : null
+    const commandIds = (this.snapshot.workspace?.tooling?.commands ?? []).map((c) => c.id)
     const pending = {
       invocationId,
       startedAt: this.clock.iso(),
+      ...(toolingMode && commandIds.length ? { tooling: { commands: toolingMode.mode, ids: commandIds, reason: toolingMode.reason } } : {}),
       marker: `devpanel:${this.runId}:${invocationId}`,
       // The runtime's reap tag, on disk before the launch: a lost owner's
       // escaped descendants can still be found by it (cleanup-barrier.mjs).
@@ -2022,6 +2081,12 @@ export class Engine {
       for (const root of turnTooling?.allowedRoots ?? []) {
         if (root.startsWith(store.runDir(this.issuePath, this.runId) + path.sep)) await fs.mkdir(root, { recursive: true })
       }
+      // Before any fence, mount point or CLI: a host without the fence and
+      // without the opt-in refuses every turn (macOS), and declared mounts
+      // nothing will bind refuse a seat with tools, in place as well.
+      const policy = this.hostFence()
+      if (policy.mode === 'refused') throw new ProcessError(policy.reason, { kind: 'environment-error', started: false })
+      this.assertMountsBound({ coordinationOnly })
       const turnFence = readAccess ? await this.readFenceSpec(scratchDir) : await this.fenceSpec({ coordinationOnly, tooling: turnTooling, scratchDir })
       // Only the turn's own scratch is writable; the coordinator's working
       // directory, the check logs and the evidence are read-only.
@@ -2135,7 +2200,7 @@ export class Engine {
     pending.answeredAt = this.clock.iso()
     pending.usage = result.usage ?? null
     pending.reap = result.diagnostics?.reap ?? null
-    pending.fence = result.diagnostics?.fence ?? (this.snapshot.fence?.namespace === 1 && this.fenceSkipped ? { namespace: 0, reason: this.fenceSkipped } : null)
+    pending.fence = result.diagnostics?.fence ?? (this.fenceSkipped && (this.snapshot.fence?.namespace === 1 || this.hostFence().mode === 'unfenced') ? { namespace: 0, reason: this.fenceSkipped } : null)
     forward('exit', `invocation completed (${result.outcome ?? 'completed'})`)
     await activityWrite
     await liveWrite

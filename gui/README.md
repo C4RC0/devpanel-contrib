@@ -157,6 +157,12 @@ The key is `chmod 600` and `cert/` is git-ignored — it must never be committed
 > token still works for everything else. This blocks web pages (DNS rebinding, cross-site
 > requests), not local processes: every local process, agents included, is an operator. It is
 > meant for an install without the seat fence, where the agents could read the token anyway.
+> **The risk:** on a macOS install that opted in to unfenced seats (`DEVPANEL_UNFENCED=acknowledged`),
+> a seat or the candidate code it runs can call this API as the operator: start runs, answer
+> questions, deliver. Without the opt-in seats are refused there. `GET /api/info` and the socket
+> `hello` carry `host.fence` (`{mode: fence|off|unfenced|refused, reason}`); the panel shows
+> `unfenced` and `refused` as a banner on every page, and a run that ran unfenced carries
+> `unfenced` (an "unfenced" chip on the issue page, a section in `result.md`).
 > `GET /api/health` (public) also returns `tokenFile`, the token's path with the home shown as `~`.
 >
 > **Reporting from a project's deployment.** `POST /api/report/:project {input, kind?, category?}`

@@ -194,6 +194,8 @@ export async function getRun (issuePath, runId, { issues, project, issueId, isAc
     suspendedMs: (run.controlSuspendedMs ?? 0) + (run.inputRetrySuspendedMs ?? 0) + (run.checkRefreshSuspendedMs ?? 0),
     failure: run.failure ?? null,
     failures: run.failures ?? [],
+    // Ran without the seat fence, under the install's opt-in (confinement-policy.mjs).
+    unfenced: run.unfenced ?? null,
     modelSubstitutions: run.modelSubstitutions ?? [],
     modelFallbackChecks: run.modelFallbackChecks ?? [],
     integrity: run.integrity ?? null,

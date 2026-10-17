@@ -205,7 +205,8 @@ supervisor, model oracle, performance probe) always pass `hygiene: true`.
   engine's fence spec carries `mounts: [{ source, target }]`: each source is
   bound READ-ONLY at its worktree-relative target, proved before launch (a
   directory, a write refused, a sentinel entry of the source visible), and a
-  source that does not exist refuses the turn naming it. The same spec reaches
+  source that does not exist refuses the turn naming it, and so does a turn
+  no proved fence would bind them in (see "Seat fence"). The same spec reaches
   every adapter through `applyFence`, so **claude, codex and gemini get the same
   mounts**; `tooling.mountTargets` adds Claude Edit/Write deny rules and
   sandbox `denyWrite` entries so a refused write is explained. Declared commands
@@ -264,6 +265,20 @@ fence could not be built: it runs unfenced and reports
 `diagnostics.fence.namespace: 0` with the reason, which the engine records on
 the step. `npm run live -- --read-fence` is the paid check (one writer turn).
 See the plan's implementation log for what is and is not fenced yet.
+
+Hosts without bubblewrap (macOS) have no fence at all
+(`gui/server/runtime/confinement-policy.mjs`). There every seat turn, tooling
+command and local check is refused before it starts, naming macOS, unless the
+install opted in with `DEVPANEL_UNFENCED=acknowledged` (`install-on-osx.sh`
+keeps it per install). With the opt-in, turns run as `namespace: 0`, local
+checks `local-unconfined` and declared commands are given unwrapped and
+labelled unconfined; the run records `unfenced` and the panel flags it on every
+page. `DEVPANEL_FENCE=off` and `DEVPANEL_FENCE_UNPROVED=run` grant nothing
+there, and Gemini seats are refused in preview, preflight and `invoke` itself.
+Declared tooling mounts are bound only by a proved fence: any turn with tools
+that would not get one (fence off, macOS, an in-place run, a run from before
+the fence) is refused naming the mount's source and target, before a mount
+point is created.
 
 Private repositories (`fence.repository: 1`): the worktree's `.git` names the
 run's worker Git directory, which the fence mounts writable for the writer and

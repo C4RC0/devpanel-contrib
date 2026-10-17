@@ -1,4 +1,6 @@
 import { probeProjectSandbox } from '../runtime/sandbox-probe.mjs'
+import { fencePolicy, harnessRefusal } from '../runtime/confinement-policy.mjs'
+import { hostPlatform } from '../runtime/platform.mjs'
 /*
  * Live-run preflight. Deliberately separate from loading: a preview resolves a
  * playbook without touching a harness, while a live run must establish that the
@@ -16,7 +18,7 @@ import { probeProjectSandbox } from '../runtime/sandbox-probe.mjs'
 
 import { CONFIG_ROOT, getValidator, schemaId } from './load.mjs'
 
-const LEVELS = ['config', 'sandbox', 'probe', 'installation', 'authentication', 'modelAccess', 'capabilities', 'checks']
+const LEVELS = ['config', 'fence', 'sandbox', 'probe', 'installation', 'authentication', 'modelAccess', 'capabilities', 'checks']
 
 const finding = (level, status, message, detail = {}) => ({ level, status, message, ...detail })
 
@@ -73,7 +75,7 @@ export function assertLaunchable (result) {
  *                  model, so a caller that has given up must be able to stop
  *                  paying for evidence it will not use.
  */
-export async function preflight (resolved, { probe, depth = 'model', root = CONFIG_ROOT, signal = null, projectPath = null, sandboxProbe = probeProjectSandbox } = {}) {
+export async function preflight (resolved, { probe, depth = 'model', root = CONFIG_ROOT, signal = null, projectPath = null, sandboxProbe = probeProjectSandbox, platform = hostPlatform(), env = process.env } = {}) {
   const findings = []
   const cancelled = () => signal?.aborted === true
 
@@ -83,11 +85,25 @@ export async function preflight (resolved, { probe, depth = 'model', root = CONF
   if (!resolved.liveExecution.eligible) {
     for (const b of resolved.liveExecution.blockers) {
       findings.push(finding('config', 'fail', b.model ? `${b.role}: model "${b.model}" ${b.reason}` : b.reason,
-        { file: b.file, remedy: b.model ? 'verify the roster entry and set verification.status to verified' : 'configure the release target and select a successfully staged release for production' }))
+        { file: b.file, remedy: b.remedy ?? (b.model ? 'verify the roster entry and set verification.status to verified' : 'configure the release target and select a successfully staged release for production') }))
     }
     return summarise(findings, { depth, probed: false })
   }
   findings.push(finding('config', 'pass', 'every participant model is verified'))
+
+  // What this host may run (confinement-policy.mjs), before anything is
+  // probed or spent. Read from the participants themselves, so a caller that
+  // bypasses the resolved blockers (a quota fallback) is held to it too.
+  const fence = fencePolicy({ platform, env })
+  let refusedHere = false
+  for (const p of Object.values(resolved.participants)) {
+    const reason = harnessRefusal(p.model.harness, { platform })
+    if (reason) { findings.push(finding('fence', 'fail', `${p.role}: ${reason}`, { remedy: 'put this seat on a claude or codex model' })); refusedHere = true }
+  }
+  if (fence.mode === 'refused') { findings.push(finding('fence', 'fail', fence.reason, { remedy: 'opt in: DEVPANEL_UNFENCED=acknowledged bash install-on-osx.sh' })); refusedHere = true }
+  if (refusedHere) return summarise(findings, { depth, probed: false })
+  if (fence.mode === 'unfenced') findings.push(finding('fence', 'warn', `unfenced: ${fence.reason}; seats run as namespace 0, local checks local-unconfined, tooling commands unconfined`))
+  const fenceRecord = fence.mode === 'unfenced' ? { fence: { mode: fence.mode, reason: fence.reason } } : {}
 
   // Check local sandbox prerequisites before spending any model probes.
   if (projectPath && Object.values(resolved.participants).some(p => p.model.harness === 'claude')) {
@@ -96,7 +112,7 @@ export async function preflight (resolved, { probe, depth = 'model', root = CONF
     catch (error) { result = { status: cancelled() ? 'unknown' : 'fail', message: error.message } }
     if (!['pass','skip','fail','unknown'].includes(result?.status)) result = { status: 'fail', message: 'Sandbox probe returned no valid evidence' }
     findings.push(finding('sandbox', result.status, result.message))
-    if (!['pass','skip'].includes(result.status)) return summarise(findings, { depth, probed: false, cancelled: cancelled() })
+    if (!['pass','skip'].includes(result.status)) return summarise(findings, { depth, probed: false, cancelled: cancelled(), ...fenceRecord })
   }
 
   // Group by effective connection, never by harness alone.
@@ -250,6 +266,7 @@ export async function preflight (resolved, { probe, depth = 'model', root = CONF
   }
 
   return summarise(findings, {
+    ...fenceRecord,
     depth,
     probed: true,
     cancelled: cancelled(),

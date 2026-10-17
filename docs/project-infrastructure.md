@@ -119,7 +119,11 @@ pass, otherwise `remote-unconfined` with the reason — the checks still run
 (label, don't refuse). A target without kinds is `remote-unconfined`. Local
 check targets run inside the seat fence (`local-enforced`, or
 `local-unconfined` when it cannot be proved or `DEVPANEL_FENCE=off`), with
-`confinement.readOnly`/`writable` bound for their toolchain.
+`confinement.readOnly`/`writable` bound for their toolchain. On a host without
+the fence (macOS) they are `local-refused` and do not run, unless the install
+opted in to unfenced operation (`DEVPANEL_UNFENCED=acknowledged`,
+`install-on-osx.sh`): then `local-unconfined`, with that reason
+(`runtime/confinement-policy.mjs`).
 
 ### Tiers: a smoke beside the reviews, the full drive after approval
 

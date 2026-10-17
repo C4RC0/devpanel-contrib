@@ -44,6 +44,9 @@ function toggleTheme (event) {
 }
 
 const hostname = computed(() => connection.host?.hostname ?? '—')
+// Seats on a host without the fence (macOS): unfenced under the install's
+// opt-in, refused without it. Shown on every page while it holds.
+const unfenced = computed(() => ['unfenced', 'refused'].includes(connection.host?.fence?.mode) ? connection.host.fence : null)
 
 // /api/whoami sits behind the token, so it is asked once a token is accepted.
 watch(isAuthenticated, (ok) => { if (ok) loadIdentity() }, { immediate: true })
@@ -193,6 +196,16 @@ watch(isAuthenticated, (ok) => { if (ok) loadIdentity() }, { immediate: true })
       >
         This panel's server is running code from before the last change, so newer
         actions will fail. Restart it to pick them up — the page itself is current.
+      </v-alert>
+      <v-alert
+        v-if="unfenced"
+        :type="unfenced.mode === 'unfenced' ? 'warning' : 'error'"
+        variant="tonal"
+        density="compact"
+        class="stale-server unfenced-host"
+      >
+        <strong>{{ unfenced.mode === 'unfenced' ? 'Unfenced:' : 'Seats refused:' }}</strong> {{ unfenced.reason }}.
+        <template v-if="unfenced.mode === 'unfenced'">Seats run as namespace 0, local checks and tooling commands unconfined; every run records it.</template>
       </v-alert>
       <router-view v-slot="{ Component }">
         <v-fade-transition mode="out-in">

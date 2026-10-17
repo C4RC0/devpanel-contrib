@@ -3,6 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { fencePolicy } from './runtime/confinement-policy.mjs'
+import { hostPlatform } from './runtime/platform.mjs'
+
 // The panel's own directory: issues, runs and their worktrees live under it,
 // so this is the filesystem a busy panel fills up.
 const PANEL_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -46,8 +49,12 @@ function round (value, digits = 1) {
 }
 
 /** Static facts about the host — sent once on connect, they never change. */
-export function hostInfo () {
+export function hostInfo ({ platform = hostPlatform(), env = process.env } = {}) {
+  const fence = fencePolicy({ platform, env })
   return {
+    // How seats are confined on this host (confinement-policy.mjs): the panel
+    // flags 'unfenced' and 'refused' persistently (App.vue).
+    fence: { mode: fence.mode, reason: fence.reason },
     hostname: os.hostname(),
     platform: `${os.type()} ${os.release()}`,
     arch: os.arch(),

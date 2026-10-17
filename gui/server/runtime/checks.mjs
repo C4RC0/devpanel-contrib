@@ -9,6 +9,8 @@ import { systemClock } from './clock.mjs'
 import { sshConnection, shellQuote } from './ssh.mjs'
 import { fingerprint } from './fingerprint.mjs'
 import { runProcess } from './process.mjs'
+import { hostPlatform } from './platform.mjs'
+import { fencePolicy } from './confinement-policy.mjs'
 import { discardReconstruction, reconstructInto, worktreeDiffDelivery } from './launch.mjs'
 import { applyFence, PANEL_ROOT } from '../../../harness/fence.mjs'
 import { childEnvironment } from '../../../harness/shared.mjs'
@@ -54,7 +56,9 @@ export async function runChecks ({
   // reviewers can tell what the change altered (compareBaseline). Its
   // directory is named, not numbered: it may run beside a numbered check.
   base = false,
-  dirName = null
+  dirName = null,
+  // The host's OS (platform.mjs): decides whether local commands may run at all.
+  platform = hostPlatform()
 }) {
   const startedAt = clock.now()
   const dir = path.join(runDir, 'checks', dirName ?? String(await nextIndex(path.join(runDir, 'checks'))).padStart(3, '0'))
@@ -99,7 +103,7 @@ export async function runChecks ({
 
     // 2. Commands, in the isolated candidate, or on the target host.
     if (target.kind === 'local') {
-      await runCommandsLocally({ target, cwd: rebuilt, dir, result, clock, signal })
+      await runCommandsLocally({ target, cwd: rebuilt, dir, result, clock, signal, platform })
     } else {
       await runCommandsOverSsh({ target, rebuilt, dir, result, materialized, clock, signal, candidateEntries: check.entries })
     }
@@ -216,10 +220,15 @@ function judge (result) {
  * environment. A fence that cannot be proved does not run candidate code on
  * this host: the check is `unavailable` with the reason (audit I5), unless the
  * operator's DEVPANEL_FENCE_UNPROVED=run says to run it unconfined, labelled;
- * DEVPANEL_FENCE=off turns the fence off altogether.
+ * DEVPANEL_FENCE=off turns the fence off altogether. A host without the fence
+ * (macOS) runs them unconfined only under the install's opt-in, and refuses
+ * them otherwise (confinement-policy.mjs).
  */
-async function localFence ({ target, cwd, signal }) {
-  if (process.env.DEVPANEL_FENCE === 'off') return { level: 'local-unconfined', reason: 'the fence is switched off (DEVPANEL_FENCE=off)', wrap: null }
+async function localFence ({ target, cwd, signal, platform }) {
+  const policy = fencePolicy({ platform })
+  if (policy.mode === 'off') return { level: 'local-unconfined', reason: 'the fence is switched off (DEVPANEL_FENCE=off)', wrap: null }
+  if (policy.mode === 'unfenced') return { level: 'local-unconfined', reason: policy.reason, wrap: null }
+  if (policy.mode === 'refused') return { level: 'local-refused', reason: policy.reason, wrap: null, refused: true }
   const confinement = target.confinement ?? {}
   const home = os.homedir()
   const inHome = (p) => p === home || p.startsWith(home + '/')
@@ -234,11 +243,11 @@ async function localFence ({ target, cwd, signal }) {
   return { level: 'local-refused', reason: fence.reason, wrap: null, refused: true }
 }
 
-async function runCommandsLocally ({ target, cwd, dir, result, clock, signal }) {
-  const { wrap, refused = false, ...confinement } = await localFence({ target, cwd, signal })
+async function runCommandsLocally ({ target, cwd, dir, result, clock, signal, platform }) {
+  const { wrap, refused = false, ...confinement } = await localFence({ target, cwd, signal, platform })
   result.confinement = confinement
   if (refused) {
-    result.error = `the check fence could not be proved, so no candidate command ran on this host: ${confinement.reason}`
+    result.error = `the check fence ${platform.bubblewrap ? 'could not be proved' : 'does not exist on this host'}, so no candidate command ran on this host: ${confinement.reason}`
     result.result = 'unavailable'
     return
   }

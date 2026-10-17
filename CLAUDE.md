@@ -476,7 +476,12 @@ New runs also resolve with `selection: 1` (materialized links carry their owner'
 and `namespace: 1`: Claude and Codex seats and coordinators run inside a bubblewrap allow-list namespace
 (`harness/fence.mjs`: only the run's paths, the CLI's install and its config directory; proved before launch;
 an unproved fence runs the turn as `namespace: 0`, recorded on the step). `DEVPANEL_FENCE=off` switches it off
-(the test runner's default, since fake CLIs live outside any run). Host Git calls on a run's worktree name the git
+(the test runner's default, since fake CLIs live outside any run). A host without bubblewrap (macOS) refuses seat
+turns, tooling commands and local checks unless the install opted in with `DEVPANEL_UNFENCED=acknowledged`
+(`install-on-osx.sh`; `runtime/confinement-policy.mjs`): then they run unfenced, recorded (`run.unfenced`, namespace 0,
+`local-unconfined`, commands rendered unwrapped and labelled unconfined) and flagged in the panel; Gemini seats are
+refused there. Declared tooling mounts are bound only by a proved fence: any other turn with tools, in place included,
+is refused naming the mount. Host Git calls on a run's worktree name the git
 directory recorded at provisioning (`runtime/engine-git.mjs`), never the worktree's seat-writable `.git` entry.
 Inside a proved fence a Claude seat's config directory is a per-run home (`runs/<id>/cli-homes/<seat>`, only the
 credential file bound in; recorded as `session.home`). The triage step of Implementation and Plan and implement

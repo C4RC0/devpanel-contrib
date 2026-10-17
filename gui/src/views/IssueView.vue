@@ -1140,6 +1140,8 @@ watch(() => route.query.run, (runId) => {
             </v-select>
             <div class="runbar__meta">
               <v-chip size="small" variant="tonal" :color="RUN_COLOUR[run.status]">{{ run.status }}</v-chip>
+              <!-- Ran without the seat fence (macOS under the install's opt-in): always shown for that run. -->
+              <v-chip v-if="run.unfenced" size="small" variant="tonal" color="warning" :title="run.unfenced.reason">unfenced</v-chip>
               <span>{{ elapsed ?? '—' }}</span>
               <span v-if="costText">{{ costText }}</span>
               <code class="runbar__id">{{ run.runId }}</code>

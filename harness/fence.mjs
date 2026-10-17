@@ -4,6 +4,8 @@ import path from 'node:path'
 
 import { runProcess, ProcessError } from '../gui/server/runtime/process.mjs'
 import { projectsRoot } from '../gui/server/project-path.mjs'
+import { fencePolicy } from '../gui/server/runtime/confinement-policy.mjs'
+import { hostPlatform } from '../gui/server/runtime/platform.mjs'
 
 /*
  * The seat fence (harness/README.md "Seat hygiene",
@@ -39,10 +41,13 @@ export const PANEL_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pat
 /**
  * The fence for a turn that has no run (top-level supervisor, model oracle,
  * performance probe): tool-free, so only its own working directory and scratch
- * are mounted. Null when the fence is switched off (DEVPANEL_FENCE=off).
+ * are mounted. Null when the fence is switched off (DEVPANEL_FENCE=off) or
+ * this install opted in to unfenced operation (confinement-policy.mjs); on a
+ * host without bubblewrap and without the opt-in the spec is returned, so
+ * applyFence and assertFenced refuse the turn.
  */
 export function runlessFence ({ cwd, writable = [] }) {
-  if (process.env.DEVPANEL_FENCE === 'off') return null
+  if (['off', 'unfenced'].includes(fencePolicy().mode)) return null
   return { cwd, writable: [...new Set([cwd, ...writable])], readOnly: [], entries: [], panelRoot: PANEL_ROOT }
 }
 
@@ -242,10 +247,20 @@ export async function defaultCanaries ({ home = os.homedir(), granted = [], proj
  * is an operator switch, `DEVPANEL_FENCE_UNPROVED=run`, never a fallback the
  * adapter takes on its own; the turn then records `namespace: 0` and why.
  */
-export function assertFenced (fenced, { turn = 'this turn' } = {}) {
+export function assertFenced (fenced, { turn = 'this turn', mounts = [], platform = hostPlatform() } = {}) {
   if (!fenced || fenced.applied) return
-  if (process.env.DEVPANEL_FENCE_UNPROVED === 'run') return
-  throw new ProcessError(`${turn} runs only inside a proved seat fence, and the fence could not be proved: ${fenced.reason} (DEVPANEL_FENCE_UNPROVED=run lets it run unfenced, recorded as namespace 0)`,
+  // A declared tooling mount is bound only by the fence: unfenced, its target
+  // would be an empty directory the prompt calls read-only (P3-1).
+  if (mounts.length) {
+    const m = mounts[0]
+    throw new ProcessError(`tooling mount ${m.target} (from ${m.source}) cannot be bound read-only in ${turn}: the fence could not be proved (${fenced.reason}); only a proved seat fence binds a declared mount, so the turn is refused`,
+      { kind: 'environment-error', started: false })
+  }
+  // Without bubblewrap there is no fence to fall back from: only the install's
+  // opt-in (DEVPANEL_UNFENCED=acknowledged) runs a seat unfenced there.
+  const bubblewrap = platform.bubblewrap
+  if (bubblewrap && process.env.DEVPANEL_FENCE_UNPROVED === 'run') return
+  throw new ProcessError(`${turn} runs only inside a proved seat fence, and the fence could not be proved: ${fenced.reason} (${bubblewrap ? 'DEVPANEL_FENCE_UNPROVED=run lets it run unfenced, recorded as namespace 0' : 'on this host only the install\'s opt-in, DEVPANEL_UNFENCED=acknowledged, runs it unfenced'})`,
     { kind: 'environment-error', started: false })
 }
 
@@ -256,8 +271,9 @@ export function assertFenced (fenced, { turn = 'this turn' } = {}) {
  * that cannot be built or proved comes back `applied: false` with the reason,
  * and the caller runs the turn unfenced and says so (decision 8).
  */
-export async function applyFence ({ spec, manifest = {}, command = null, signal = null }) {
+export async function applyFence ({ spec, manifest = {}, command = null, signal = null, platform = hostPlatform() }) {
   if (!spec) return { applied: false, reason: 'no fence requested for this turn', wrap: null }
+  if (!platform.bubblewrap) return { applied: false, reason: `${platform.id === 'darwin' ? 'macOS (darwin)' : platform.id} has no seat fence (bubblewrap is Linux-only)`, wrap: null }
   try {
     const full = {
       cwd: spec.cwd,

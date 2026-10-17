@@ -141,9 +141,15 @@ npm run preview -- implementation --issue <project>/<issue-id>   # dry run: read
 
 ## Limitations
 
-- **macOS runs unfenced.** `install-on-osx.sh` installs a per-user launchd agent with `DEVPANEL_FENCE=off` and
-  `DEVPANEL_AUTH=local`, because macOS has no bubblewrap. No fence is requested, so runs are recorded as
-  unfenced, and seats are confined only by the CLIs' own sandboxes and permission rules. The script needs
+- **macOS has no seat fence.** `install-on-osx.sh` installs a per-user launchd agent with `DEVPANEL_AUTH=local`.
+  macOS has no bubblewrap, so by default the panel refuses seat turns, tooling commands and local checks there,
+  naming macOS. Unfenced operation is an explicit per-install opt-in: `DEVPANEL_UNFENCED=acknowledged bash
+  install-on-osx.sh` (kept across reinstalls; `DEVPANEL_UNFENCED=no` withdraws it). Opted in, seats are confined
+  only by the CLIs' own sandboxes and permission rules; every run records it (`unfenced`, namespace 0, local checks
+  `local-unconfined`, tooling commands unconfined, in `result.md` too) and the panel shows it on every page. Gemini
+  seats are refused on macOS, and a project that declares tooling mounts cannot run there (nothing binds them).
+  Under `DEVPANEL_AUTH=local` every local process is the operator, unfenced seats and the code they run included:
+  they can start runs, answer questions and deliver through the API. It is refused unless `HOST` is loopback. The script needs
   `DEVPANEL_SOURCE`, the rsync source of a panel checkout, and never syncs the Mac's own `projects/`,
   `host-config/`, issues or token.
 - **The default seats are one choice of models.** The roster and playbook participants name the models the

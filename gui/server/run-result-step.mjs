@@ -53,6 +53,10 @@ export function renderResult (run, outputs = {}) {
   const detail = run.blockedReason === 'closure-conditions-unmet' && reasoning ? reasoning : e.detail
   if (detail) lines.push(detail, '')
   if (e.cause) lines.push('```text', e.cause, '```', '')
+  // Unfenced operation (macOS under the install's opt-in) is part of what the run was.
+  if (run.unfenced) {
+    lines.push('## Unfenced run', '', `${run.unfenced.reason}. Seats ran as ${run.unfenced.seats}, local checks ${run.unfenced.checks}, tooling commands ${run.unfenced.tooling}: nothing but each CLI's own sandbox confined them.`, '')
+  }
   if (e.unmet?.length) {
     lines.push('## Not met', '')
     for (const u of e.unmet) lines.push(`- ${u.id ? `**${u.id}**: ` : ''}${u.text ?? 'not met'}`)
