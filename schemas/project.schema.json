@@ -33,6 +33,58 @@
     "infrastructure": {
       "$ref": "#/$defs/infrastructure"
     },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "commands"
+      ],
+      "description": "Check commands run on THIS host in the rebuilt candidate, for a project without SSH staging. Used by every playbook that records revisions (implementation, plan-and-implement, refactoring) as a `kind: local` target, through the local check fence: labelled local-enforced (Linux, fence proved), local-unconfined (fence switched off, or a host without one under the install's opt-in) or local-refused (no fence and no opt-in: nothing runs). A project declares either this or infrastructure.testDrive, never both. See docs/project-infrastructure.md \"Local checks\".",
+      "properties": {
+        "requirement": {
+          "enum": [
+            "required",
+            "optional"
+          ],
+          "default": "required",
+          "description": "Strengthens the playbook's requirement, never weakens it."
+        },
+        "commands": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+        },
+        "finallyCommands": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/commands"
+        },
+        "confinement": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Toolchain paths the local check fence binds besides the candidate (e.g. ~/.cargo read-only). Never secrets.",
+          "properties": {
+            "readOnly": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/confinement/properties/readOnly"
+            },
+            "writable": {
+              "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/confinement/properties/writable"
+            }
+          }
+        },
+        "timing": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/timing"
+        },
+        "retryFailed": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/retryFailed"
+        },
+        "compareBaseline": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/compareBaseline"
+        },
+        "tiers": {
+          "$ref": "https://devpanel/schemas/playbook.schema.json#/$defs/checkTarget/properties/tiers"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
     "actions": {
       "type": "array",
       "description": "Operator scripts that act on the live project checkout, run on this host from the project root. A project with a push.sh always has a built-in `push` action (bash ./push.sh); declaring an action with id `push` replaces it. What runs is this configuration, never text supplied by a model or a browser.",
@@ -650,6 +702,11 @@
     {
       "required": [
         "infrastructure"
+      ]
+    },
+    {
+      "required": [
+        "checks"
       ]
     },
     {

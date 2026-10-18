@@ -169,7 +169,8 @@ procedures are the installation's own files, kept in `tools/releases/` untracked
 `install-on-osx.sh` requires `DEVPANEL_SOURCE` and never syncs `projects/`,
 `host-config/`, `issues/` or token data, so a Mac keeps its own project files and
 host-config across every run. Create the Mac's projects in its own
-`host-config/projects/` (or `projects/`).
+`host-config/projects/` (or `projects/`). [macOS](macos.md) covers the rest: seats,
+fence labels, local checks, the service and the Mac proof checklist.
 
 ## Publishing
 

@@ -164,6 +164,9 @@ The key is `chmod 600` and `cert/` is git-ignored — it must never be committed
 > `unfenced` and `refused` as a banner on every page, and a run that ran unfenced carries
 > `unfenced` (an "unfenced" chip on the issue page, a section in `result.md`).
 > `GET /api/health` (public) also returns `tokenFile`, the token's path with the home shown as `~`.
+> `GET /api/info` and `hello` also carry `host.directories` (`{projects, issues}`, the home shown as `~`):
+> the projects root and the issues directory (`DEVPANEL_ISSUES_DIR`, its own setting, never derived from
+> the projects root), which the drawer's re-scan button, the issue-list footer and the path placeholders show.
 >
 > **Reporting from a project's deployment.** `POST /api/report/:project {input, kind?, category?}`
 > needs no token (`server/report.mjs`, mounted before the gate). It opens an issue and

@@ -9,7 +9,7 @@ import { api } from '@/api'
 import { actorName, proxyUser, rememberedActor } from '@/identity'
 import { loadProjects } from '@/projects'
 import { reportTags } from '@/report-tags'
-import { socket } from '@/socket'
+import { connection, socket } from '@/socket'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,6 +46,9 @@ async function remove (issue) {
 }
 
 const project = computed(() => route.params.project)
+// The install's configured directories (home as ~); the issues directory is its own setting.
+const issuesPath = computed(() => `${connection.host?.directories?.issues ?? 'issues'}/${project.value}`)
+const projectPath = computed(() => connection.host?.directories?.projects ? `${connection.host.directories.projects}/${project.value}` : '/path/to/project')
 const projectLabel = computed(() => String(project.value).replace(/-project$/, ''))
 
 const BASE_HEADERS = [
@@ -80,7 +83,7 @@ async function load () {
   const wanted = archived.value
   loadError.value = ''
   try {
-    // Re-scan /srv as well, so the drawer picks up new projects and counts.
+    // Re-scan the projects directory as well, so the drawer picks up new projects and counts.
     const [next] = await Promise.all([api.listIssues(project.value, { archived: wanted }), loadProjects()])
     if (seq !== loadSeq) return                    // superseded while in flight
     issues.value = next
@@ -333,7 +336,7 @@ watch([project, archived], () => {
 
       <footer v-if="!loadError" class="issues__foot">
         <span>{{ countLabel }}</span>
-        <code class="issues__path">issues/{{ project }}</code>
+        <code class="issues__path">{{ issuesPath }}</code>
       </footer>
     </v-card>
 
@@ -347,7 +350,7 @@ watch([project, archived], () => {
           <v-textarea
             v-model="name"
             label="Title, report, or local Markdown path"
-            placeholder="Describe the issue, paste a report, or enter /path/to/audit.md"
+            :placeholder="`Describe the issue, paste a report, or enter ${projectPath}/audit.md`"
             persistent-placeholder
             hint="One line is a title. A report uses its heading or first line as the title. Paths refer to this server; relative paths start in the project folder."
             persistent-hint

@@ -203,6 +203,39 @@ cd gui
 npm run config:check -- implementation --project <project-id>
 ```
 
+## Local checks: a project without staging
+
+A project that has no SSH staging environment (a library, a CLI, a Rust crate on a
+Mac) declares its checks itself, at the top of `projects/<id>.yaml`:
+
+```yaml
+id: example-crate-project
+checks:
+  requirement: required        # default; optional is the other choice
+  commands:
+    - { id: fmt, run: cargo fmt --check }
+    - { id: clippy, run: cargo clippy -- -D warnings }
+    - { id: test, run: cargo test }
+  confinement:
+    readOnly: [/home/me/.cargo, /home/me/.rustup]   # toolchain paths the fence binds; never secrets
+```
+
+Every playbook whose steps record a revision (implementation, plan-and-implement,
+refactoring) resolves them as a `kind: local` target: the candidate is rebuilt
+from base plus patch on this host, fingerprinted, and the commands run in it, with
+every command's log under `runs/<id>/checks/<n>/`. Timing defaults to every
+revision, beside the reviews, and a failed required check sends the author another
+round; `timing`, `retryFailed`, `compareBaseline`, `tiers` and `finallyCommands`
+mean what they mean for a test drive. `requirement` strengthens the playbook's,
+never weakens it. Commands take no `kind` and none of the SSH confinement options:
+they run through the local check fence, labelled `local-enforced` (Linux, fence
+proved), `local-unconfined` (`DEVPANEL_FENCE=off`, or macOS under the install's
+opt-in) or `local-refused` (no fence and no opt-in: nothing runs, the result is
+`unavailable`, and a required check blocks closure). A project declares either
+`infrastructure.testDrive` or `checks`, never both. `npm run config:check --
+implementation --project <id>` prints `target=local commands=…`. A project's
+own file stays with the installation that runs it (`host-config/projects/`).
+
 ## What participants receive
 
 The infrastructure configuration contributes to the preview/configuration hash

@@ -96,6 +96,44 @@ export function stagingTarget (infra) {
     ...(infra.staging.projectRoot ? { projectRoot: infra.staging.projectRoot } : {}) }
 }
 
+/**
+ * A project's own local checks (projects/<id>.yaml `checks`): the structural
+ * rules the schema cannot say. They run on this host through the local check
+ * fence, so the SSH test drive's confinement options mean nothing here, and a
+ * project names one check mechanism, never both.
+ */
+export function localChecksErrors (project) {
+  const checks = project?.checks
+  if (!checks) return []
+  const errors = []
+  if (project.infrastructure) errors.push('declare checks either as infrastructure.testDrive (SSH staging) or as checks (local), not both')
+  if (!checks.commands.some(c => c.required !== false)) errors.push('checks needs at least one required command')
+  const all = [...checks.commands, ...(checks.finallyCommands ?? [])]
+  if (new Set(all.map(c => c.id)).size !== all.length) errors.push('checks command ids must be unique')
+  checks.commands.forEach((c, i) => {
+    for (const id of c.needs ?? []) if (!checks.commands.slice(0, i).some(e => e.id === id)) errors.push(`${c.id}: needs must name an earlier command (${id})`)
+  })
+  for (const c of checks.finallyCommands ?? []) if (c.needs) errors.push(`${c.id}: finallyCommands always run and cannot declare needs`)
+  for (const c of all) {
+    const options = ['kind', 'network', 'service', 'join', 'unprivilegedPorts', 'lifetimeSeconds'].filter(k => c[k] !== undefined)
+    if (options.length) errors.push(`${c.id}: ${options.join(', ')} belong to an SSH test drive; local checks run through the local check fence`)
+  }
+  errors.push(...tierErrors(checks))
+  return errors
+}
+
+/** The `kind: local` check target of a project's own checks. */
+export function localTarget (checks) {
+  return { kind: 'local', commands: checks.commands,
+    ...(checks.finallyCommands ? { finallyCommands: checks.finallyCommands } : {}),
+    ...(checks.confinement ? { confinement: checks.confinement } : {}),
+    ...(checks.compareBaseline ? { compareBaseline: true } : {}),
+    // Absent timing is the engine's every-revision: a local check is cheap.
+    ...(checks.timing ? { timing: checks.timing } : {}),
+    ...(Number.isInteger(checks.retryFailed) ? { retryFailed: checks.retryFailed } : {}),
+    ...(checks.tiers ? { tiers: checks.tiers } : {}) }
+}
+
 export function infrastructureBrief (infra) {
   if (!infra) return 'No project infrastructure is configured. Do not invent container names, access methods or test results.'
   return `Project infrastructure (operator configuration):

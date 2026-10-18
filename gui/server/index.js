@@ -127,8 +127,10 @@ const LOCAL = localLogin({ host: HOST, port: PORT })
 app.use('/api', localLoginMiddleware(LOCAL))
 app.use('/api', requireToken(TOKEN))
 
+// The issues directory is configured on its own (DEVPANEL_ISSUES_DIR), never derived from the projects root.
+const info = () => hostInfo({ issuesDir: issues.ISSUES_DIR })
 app.get('/api/info', (_req, res) => {
-  res.json(hostInfo())
+  res.json(info())
 })
 
 app.use(express.json({ limit: '2mb' }))
@@ -986,7 +988,7 @@ function startTicker () {
 
 io.on('connection', (socket) => {
   sourceState().then((source) => socket.emit('hello', {
-    host: hostInfo(),
+    host: info(),
     tickMs: TICK_MS,
     metrics: metricsSnapshot({ clients: io.engine.clientsCount, source })
   }))

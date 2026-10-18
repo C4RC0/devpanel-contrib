@@ -109,7 +109,7 @@ for (const id of ids) {
       const ver = q.model.verification?.status === 'verified' ? '' : ` ${c.yellow}(unverified)${c.off}`
       console.log(`    ${role.padEnd(12)} ${q.model.id} ${c.dim}${q.model.wire} via ${q.model.harness}${c.off} ${eff}${ver}${q.writesCode ? ` ${c.dim}[writer]${c.off}` : ''}`)
     }
-    console.log(`    ${c.dim}checks${c.off}     requirement=${p.checks.requirement} target=${p.checks.target?.kind ?? 'none'}`)
+    console.log(`    ${c.dim}checks${c.off}     requirement=${p.checks.requirement} target=${p.checks.target?.kind ?? 'none'}${p.checks.target ? ` commands=${(p.checks.target.commands ?? []).map((x) => x.id).join(',')} timing=${p.checks.target.timing ?? 'every-revision'}` : ''}`)
     console.log(`    ${c.dim}autoClose${c.off}  ${p.autoClose.minimumVerification} ${c.dim}(from ${p.autoClose.source})${c.off}`)
     console.log(`    ${c.dim}budgets${c.off}    ${Object.entries(p.budgets).map(([k, v]) => `${k}=${v}`).join(' ')}`)
     console.log(`    ${c.dim}config${c.off}     ${p.configHash}`)

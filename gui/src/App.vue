@@ -44,6 +44,8 @@ function toggleTheme (event) {
 }
 
 const hostname = computed(() => connection.host?.hostname ?? '—')
+// The install's own projects directory (home as ~), from /api/info's hello.
+const rescanLabel = computed(() => `Re-scan ${connection.host?.directories?.projects ?? 'the projects directory'} for projects`)
 // Seats on a host without the fence (macOS): unfenced under the install's
 // opt-in, refused without it. Shown on every page while it holds.
 const unfenced = computed(() => ['unfenced', 'refused'].includes(connection.host?.fence?.mode) ? connection.host.fence : null)
@@ -100,8 +102,8 @@ watch(isAuthenticated, (ok) => { if (ok) loadIdentity() }, { immediate: true })
           variant="text"
           density="comfortable"
           :loading="projectsLoading"
-          aria-label="Re-scan /srv for projects"
-          title="Re-scan /srv for projects"
+          :aria-label="rescanLabel"
+          :title="rescanLabel"
           @click="rescanProjects"
         />
       </div>

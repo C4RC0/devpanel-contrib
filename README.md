@@ -151,7 +151,7 @@ npm run preview -- implementation --issue <project>/<issue-id>   # dry run: read
   Under `DEVPANEL_AUTH=local` every local process is the operator, unfenced seats and the code they run included:
   they can start runs, answer questions and deliver through the API. It is refused unless `HOST` is loopback. The script needs
   `DEVPANEL_SOURCE`, the rsync source of a panel checkout, and never syncs the Mac's own `projects/`,
-  `host-config/`, issues or token.
+  `host-config/`, issues or token. [docs/macos.md](docs/macos.md) is the whole account, with the Mac proof checklist.
 - **The default seats are one choice of models.** The roster and playbook participants name the models the
   panel was developed with. Review them, and put your own projects, release targets and settings in
   `host-config/`, before running anything that spends money or touches a container; the generic examples are in

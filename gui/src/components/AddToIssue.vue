@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 
 import { api } from '@/api'
+import { connection } from '@/socket'
 
 /*
  * Put something into an issue: a note, some links, some files.
@@ -139,7 +140,7 @@ async function submit () {
       <v-textarea
         v-model="linkText"
         label="Links and paths"
-        placeholder="One per line — https://… or /path/to/some-project/logs/today.log"
+        :placeholder="`One per line — https://… or ${connection.host?.directories?.projects ?? '/path/to'}/${project}/logs/today.log`"
         variant="outlined"
         density="comfortable"
         rows="2"

@@ -5,7 +5,7 @@ import { setToken, wasRejected } from '@/auth'
 
 const value = ref('')
 const submitted = ref(false)
-// The token's place differs per install (/srv on the Linux hosts, ~/devpanel on a Mac); the public health check names it.
+// The token's place differs per install (the checkout on a Linux host, ~/devpanel on a Mac); the public health check names it.
 const tokenFile = ref('<devpanel directory>/.devpanel-token')
 
 onMounted(async () => {

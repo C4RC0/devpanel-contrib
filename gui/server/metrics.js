@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { projectsRoot } from './project-path.mjs'
 import { fencePolicy } from './runtime/confinement-policy.mjs'
 import { hostPlatform } from './runtime/platform.mjs'
 
@@ -48,10 +49,24 @@ function round (value, digits = 1) {
   return Number(value.toFixed(digits))
 }
 
-/** Static facts about the host — sent once on connect, they never change. */
-export function hostInfo ({ platform = hostPlatform(), env = process.env } = {}) {
+/** A path as the panel shows it: the home directory as `~`. */
+export function homeRelative (p, home = os.homedir()) {
+  if (!p) return p ?? null
+  if (p === home) return '~'
+  return p.startsWith(home + path.sep) ? '~' + p.slice(home.length) : p
+}
+
+/**
+ * Static facts about the host — sent once on connect, they never change.
+ * The issues directory is the caller's (issues.js ISSUES_DIR, from
+ * DEVPANEL_ISSUES_DIR): it is configured on its own, never derived from the
+ * projects root.
+ */
+export function hostInfo ({ platform = hostPlatform(), env = process.env, projectsDir = projectsRoot(), issuesDir = null } = {}) {
   const fence = fencePolicy({ platform, env })
   return {
+    // Where this install keeps projects and issues, for the panel's texts.
+    directories: { projects: homeRelative(projectsDir), issues: homeRelative(issuesDir) },
     // How seats are confined on this host (confinement-policy.mjs): the panel
     // flags 'unfenced' and 'refused' persistently (App.vue).
     fence: { mode: fence.mode, reason: fence.reason },
