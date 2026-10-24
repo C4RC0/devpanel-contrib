@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Command-line client for the devpanel API, used by the devpanel skill (SKILL.md beside it).
 //
-// It only opens issues, reads their state and adds material to them. Starting a run is deliberately
-// absent: a start spends money and belongs to the operator or the top-level supervisor. `answer` is the
-// one command that can start a run, because the server restarts the same playbook after an owner answer.
+// It opens issues, reads their state, adds material to them and starts runs. A start spends money, so it
+// happens only when the user asks for it (SKILL.md), always through `start`, which previews first and
+// refuses a configuration the preview marks blocking. `answer` also starts a run: the server restarts the
+// same playbook after an owner answer.
 import fs from 'node:fs';
 import https from 'node:https';
 import path from 'node:path';
@@ -40,6 +41,8 @@ const USAGE = `usage: devpanel.mjs [-p <project>] <command> ...
   result <id>                 the latest run's result.md and patch location
   note <id> <file.md|->       add a note step (context for the next run)
   answer <id> <file.json|->   answer triage questions; RESTARTS the run (paid)
+  preview <id> <playbook>     what a start would run: checks, rounds, budgets, prerequisites (free)
+  start <id> <playbook>       preview, then start that exact configuration (paid; only on the user's word)
 <id> may be a unique prefix or slug fragment. Project defaults to the nearest *-project directory above the cwd.`;
 
 function fail(message) {
@@ -168,6 +171,20 @@ const commands = {
         console.log(`added ${step.id} to ${project}/${id}`);
     },
 
+    async preview(project, wanted, playbook) {
+        const { id, p } = await previewOf(project, wanted, playbook);
+        console.log(describePreview(project, id, p).join('\n'));
+    },
+
+    // The start carries the previewed configHash, so the server refuses it if the configuration changed in between.
+    async start(project, wanted, playbook) {
+        const { id, p } = await previewOf(project, wanted, playbook);
+        console.log(describePreview(project, id, p).join('\n'));
+        if (!p.configurationReady) fail('not started: the preview lists a blocking prerequisite');
+        const run = await api('POST', `${base(project)}/issues/${id}/runs`, { playbook, configHash: p.configHash });
+        console.log(`started ${project}/${id} run ${run.runId ?? run.id ?? JSON.stringify(run)}`);
+    },
+
     // Body: { "actor": "<who decided>", "answers": { "Q1": "..." } } or { "actor": ..., "split": "accept" | "decline" }, optional "note".
     async answer(project, wanted, file) {
         const id = await resolveId(project, wanted);
@@ -180,6 +197,24 @@ const commands = {
         console.log(JSON.stringify(r, null, 2));
     },
 };
+
+async function previewOf(project, wanted, playbook) {
+    if (!playbook) fail('name the playbook, e.g. implementation, plan-and-implement, analysis, staging');
+    const id = await resolveId(project, wanted);
+    const p = await api('GET', `/api/playbooks/${encodeURIComponent(playbook)}/preview?project=${encodeURIComponent(project)}&issue=${encodeURIComponent(id)}`);
+    return { id, p };
+}
+
+function describePreview(project, id, p) {
+    const target = p.checks?.target;
+    const lines = [`${project}/${id} — ${p.playbook?.title ?? p.playbook?.id ?? '?'} (config ${String(p.configHash).slice(0, 12)})`,
+        `checks: ${p.checks?.requirement ?? 'none'}${target ? `, ${target.kind}${target.compareBaseline ? ', with baseline' : ''}` : ''}`,
+        `rounds: ${(p.limits?.rounds ?? []).map((r) => `${r.phase}=${r.maxRounds}`).join(' ') || '—'}`,
+        `budgets: ${JSON.stringify(p.limits?.budgets ?? {})}`,
+        `delivery: ${p.delivery?.action ?? '?'}${p.delivery?.destination ? ` → ${p.delivery.destination}` : ''}`];
+    for (const x of p.prerequisites ?? []) lines.push(`${x.category}: ${x.kind} — ${x.detail ?? ''}`);
+    return lines;
+}
 
 const args = process.argv.slice(2);
 let given = null;

@@ -16,6 +16,8 @@ devpanel.mjs status <id>              # latest run explained, unmet goals, triag
 devpanel.mjs result <id>              # result.md of the latest run, link to changes.patch
 devpanel.mjs note <id> note.md        # context the next run will read
 devpanel.mjs answer <id> answer.json  # RESTARTS the run — see below
+devpanel.mjs preview <id> <playbook>  # what a start would run (free)
+devpanel.mjs start <id> <playbook>    # paid; only when the user asks — see below
 ```
 
 ## Writing the issue
@@ -49,7 +51,18 @@ How to prove it: the test suite, a selftest, a staging check, a command and its 
 - Leave out conversation history and politeness; the agents read every word.
 - Write the markdown to the scratchpad, open it, then delete the file.
 
-After opening, tell the user the issue id and the link the client prints. Starting a run is not this skill's job: the operator starts it in the panel (or the top-level supervisor does). If the user asks to start one, say so; do not call the runs API.
+After opening, tell the user the issue id and the link the client prints.
+
+## Starting a run
+
+A run spends money, so it starts only when the user asks for it in this conversation; otherwise the operator starts it in the panel (or the top-level supervisor does). On the user's word:
+
+```sh
+devpanel.mjs preview <id> <playbook>   # free: checks, rounds, budgets, delivery, prerequisites
+devpanel.mjs start <id> <playbook>     # previews again, refuses a blocking prerequisite, starts that exact configuration
+```
+
+Playbooks: `analysis`, `triage`, `implementation`, `plan-and-implement`, `staging`, `deployment`. Pick the one that fits and say which. Relay the preview's checks and budget lines with the run id. A production `deployment` still needs the operator's explicit instruction (general §010).
 
 ## Following up
 
