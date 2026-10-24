@@ -280,6 +280,18 @@ offers refresh-checks (below) to rerun the checks on that candidate once a flaky
 or environmental failure is fixed, and Continue (`checks-failed-unchanged`) or
 Resume (`rounds-exhausted`) for another author round.
 
+A check that fails the gate **only** because its comparison base did not finish
+its selftest run (the selftest comparison is `not-made` with `baseUnfinished`,
+and without it the check would pass: `inconclusiveBase`, baseline-failures.mjs)
+says nothing about the candidate. On a revision every reviewer approved, the
+loop stops as `checks-inconclusive` at once: no author round, since no source
+change answers it. When the reviewers have findings of their own, their round
+goes ahead, but the check is not counted against the author. Such a run is a
+checks-only block: refresh-checks drives a fresh base (an unfinished one is
+never held or cached) and reruns the candidate's checks; Continue gives the
+author a round anyway; Resume is not offered, as replay reaches the same stop.
+The check history marks such a check `inconclusive: true`.
+
 ### Plan findings are owed by the implementation
 
 The substantial findings raised while the plan was under review are recorded as
@@ -305,8 +317,10 @@ maildir run did exactly that when a handoff froze the file the plan's fix lived 
 
 A finding that shows the artifact contradicts one of the brief's acceptance
 criteria names it in `contradicts` (the criterion's id, as triage recorded it in
-`acceptanceCriteria`). Such a finding is blocking whatever its severity: a
-comment, reference or documentation defect counts when a criterion names it. The
+`acceptanceCriteria`). Such a finding is blocking whatever its severity. The
+criteria themselves therefore name outcomes, not chores: the triage and orient
+prompts refuse "documentation updated"-style criteria, so a wording slip is an
+ordinary finding with its own severity, not a criterion violation. The
 auditor's own observations outside the criteria keep their severity and may stay
 non-blocking. `criterion` alone cannot carry this: it may cite an acceptance
 criterion, a plan commitment or an invariant, and a minor note may cite a
@@ -551,8 +565,31 @@ and line positions are never compared.
 - `new-failures`: `newFailures` names the tests that fail only on the
   candidate, beside the `baselineKnown` ones.
 - `not-made`, with the `reason`: the candidate lists failures but its report,
-  or the base's, cannot be read, or there is no base of this source revision.
+  or the base's, cannot be read, or there is no base of this source revision,
+  or the base's report holds a suite-level failure (a name ending in a
+  parenthesised segment: `worker/(suite)`, `(suite-busy)`,
+  `admin/(thread-ready)`) while a candidate failure is absent from it. Such a
+  base never finished its suites, so it cannot call a failure new: it is not
+  evidence of a regression.
 - `not-applicable`: the command itself failed, so the byte rules judge it.
+
+**An unfinished base is driven again.** When an unfinished base is what makes
+the candidate's selftest comparison inconclusive (`baseUnfinished`),
+`checkCandidate` drives the base once more, past the baseline cache; a candidate
+with nothing to judge against it does not pay for that drive. A cached base
+found unfinished (stored before such bases were refused) is discarded from the
+cache first, or every later run would hit it again and could not store the
+complete one under the same key. The unfinished drive stays in
+`run.baselineChecks` as evidence with `unfinished: true`, which no later check
+reuses (`unfinishedSuites` decides it); a second unfinished drive is compared
+(as `not-made`, `baseUnfinished`) but neither reused nor cached, and the review
+loop stops as `checks-inconclusive` (above). One redrive, not more: a base that
+stops early twice is a staging-drive problem a person should look at, and
+Refresh checks drives again when it is fixed. The redrive is independent of
+`retryFailed`, which reruns only the candidate's drive; with tiers, each tier's
+target has its own base and its own redrive. The DKIM run of 2026-10-17 was
+refused twice because a base whose worker suite had timed out made two
+inherited failures look new.
 
 A candidate whose report lists failures captures the base even when the check
 passed. `gatingResult` is `failed` on `new-failures` and `not-made`, whatever

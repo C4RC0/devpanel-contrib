@@ -325,10 +325,11 @@ them, so deleting `001` by hand does not make the next step collide with `002`.
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/projects` | re-scans `/srv` — every `*-project`, each with its issue count |
-| `GET /api/projects/:project/issues` | that project's issues, newest first |
+| `GET /api/projects/:project/issues` | that project's issues, newest first; each with `family` (`server/issue-family.mjs`): `parent` (`openedBy.from`, `known: false` when it is in no folder and no bundle), `children`, `openChildren`, `waitingOn` (unsettled prerequisites; one in another project is `unknown`) and `blocks`. The list page nests children under their parent (`src/issue-tree.js`) while no column sort is set |
 | `POST /api/projects/:project/issues` | open one — `{ name }` |
 | `POST /api/report/:project` | **no token**, private network only: open one from a project's container — `{ input }` (Markdown, always text), answers `{ project, id }` only; see the notes under "HTTPS" |
 | `GET /api/projects/:project/issues/:id` | one issue with its steps and files |
+| `GET /api/projects/:project/issues/:id/family` | `{parent, children, dependsOn, dependsOnReason, blocks}`, each member `{project, id, name, disposition, archived, packed, settled, run}` (packed issues included; an unreadable one `missing: true`). Provenance and order stay separate: a parent is not a prerequisite |
 | `POST /api/projects/:project/issues/:id/steps` | add the next step — `{ name }` |
 | `GET /api/projects/:project/issues/:id/runs/:runId` | one run in full; `metrics` (`runtime/run-metrics.mjs`) holds `time` (`agentMs`, `operatorWaitMs`, `suspendedMs`, `checksMs` = the union of every recorded check run's own interval with overlap counted once, `waitingForChecksMs` = check time while no seat turn ran, a turn still in flight included, `otherMs` without it), `rounds`, `findings`, `closureReturns` and `regressionsAfterApproval` (checks that failed, inherited failures included, or whose baseline comparison named new failures, on a revision already approved when they began; `regressionsBasis` says whether an older record made it partly inferred); `landed` is the manual landing record, or null |
 | `GET /api/projects/:project/issues/:id/runs/:runId/live/:invocationId` | the runtime's raw output for one turn, `?after=<seq>` to continue |
@@ -339,7 +340,7 @@ them, so deleting `001` by hand does not make the next step collide with `002`.
 | `GET /api/playbooks` | every playbook with its strategy, default `intent` and available `intents` |
 | `POST /api/projects/:project/issues/:id/disposition` | record the issue's state with evidence — `{ value, evidence, runId? }` |
 | `POST /api/projects/:project/issues/:id/priority` | record where the issue sits in the execution order — `{ value, reason }`, value `urgent\|high\|normal\|low` |
-| `POST /api/projects/:project/issues/:id/dependencies` | record prerequisites — `{ dependsOn: [ids], reason }` (same project, or `project/id`; `[]` clears). The supervisor does not start the issue while one has no disposition and is not archived |
+| `POST /api/projects/:project/issues/:id/dependencies` | record prerequisites — `{ dependsOn: [ids], reason }` (same project, or `project/id`; `[]` clears). The supervisor does not start the issue while one has no disposition and is not archived. A cycle of any length is refused. An accepted split chains its parts: each waits for the one before |
 | `POST /api/projects/:project/issues/:id/runs/:runId/finalize` | evaluate closure again for a run that stopped at delivery, from its retained worktree |
 | `POST /api/projects/:project/issues/:id/runs/:runId/reconcile-delivery` | merge the approved patch onto source that drifted on its own paths, revalidate with the configured checks, carry the approvals and deliver; a refusal lists the paths in `run.reconciliations` |
 | `GET /api/projects/:project/issues/:id/runs/:runId/patch` | download the retained patch |

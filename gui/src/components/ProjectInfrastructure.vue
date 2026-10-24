@@ -29,7 +29,7 @@ async function inspect (environment, resource) {
 </script>
 
 <template>
-  <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
+  <v-alert v-if="error" type="error" variant="tonal" class="infrastructure__error">{{ error }}</v-alert>
   <details v-if="infrastructure" class="infrastructure">
     <summary>Infrastructure · {{ infrastructure.staging.id }} staging · {{ infrastructure.deployments.length }} deployment environments</summary>
     <p class="orientation">{{ infrastructure.orientation }}</p>
@@ -52,6 +52,11 @@ async function inspect (environment, resource) {
 
 <style scoped>
 .infrastructure { border: 1px solid rgba(var(--v-theme-on-surface), .15); border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: .8125rem; overflow-wrap: anywhere; }
+/* Shown in the project page's title row (ProjectIssuesView): closed it is one compact line beside the title;
+   open it takes the row's full width below it, since its environments and output need the room. */
+.infrastructure:not([open]) { padding: 3px 10px; margin: 0; font-size: .75rem; }
+.infrastructure[open] { flex-basis: 100%; margin: 4px 0 0; }
+.infrastructure__error { flex-basis: 100%; }
 summary { cursor: pointer; font-weight: 600; }
 p { margin: 8px 0; }
 .orientation { white-space: pre-wrap; }

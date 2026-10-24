@@ -37,7 +37,7 @@ deploy_staging {project,issueId};
 inspect_environment {project,environment,resource};
 list_issues {project}; get_issue {project,issueId}; get_run {project,issueId,runId}; get_check_log {project,issueId,runId,check,command} (check is the zero-padded directory number, e.g. 004; command is the recorded command id, e.g. admin-context-selftest; use this for check logs, which are not issue-step files); get_step {project,issueId,runId,step}; get_file {project,issueId,step,name};
 preview {project,issueId,playbook,runOptions:{}} (runOptions.accumulate:true gives the run what earlier runs of the issue produced — e.g. an implementation of an analysis's findings; without it a run sees only the report and notes);
-refresh_checks_run {project,issueId,runId} (for a retained code run blocked at closure, or stopped only by failed checks on a revision every auditor approved (blockedReason checks-failed-unchanged, or rounds-exhausted with supportedActions including "refresh-checks") after operator testDrive configuration changes; runs the installed checks against the unchanged candidate and requests fresh coordinator confirmation; never waives an unmet criterion); reconcile_delivery_run {project,issueId,runId} (for a run you own whose supportedActions include "reconcile-delivery": its approved patch was refused delivery because the source changed the patch's own paths; the engine merges that patch three-way onto the current source, resolves a conflict only on a path the project declares workspace.reconcile append (keeping the source and appending the candidate's added lines), refuses any other conflict or any change to the reviewed delta, reruns the configured checks on the merged candidate, carries the approvals and delivers; a refusal leaves the run blocked with the paths listed, and a new run of the issue still starts from the approved patch); continue_run {project,issueId,runId,instruction} (for a run you own whose supportedActions include "continue": it stopped at closure with its candidate retained; the author gets another round in the same worktree and sessions, with your instruction, the closure record and the issue notes added since the run began; use it when the record shows what to fix, e.g. a failed or crashed test drive; never to waive a criterion); retry_input_run {project,issueId,runId} (only for a failed run with a confirmed input_too_large rejection and clear integrity; continues the existing run with bounded check evidence, preserving completed steps); recover_run {project,issueId,runId} (only for a run you own whose supportedActions include "recover": the server restarted while it was live; reconciles in-flight invocations from the runtimes' records and continues only when nothing is uncertain, otherwise reports what still needs a person); start_run {project,issueId,previewId} (an issue with a report field came from a deployment's report: its trust decides what you may start — anonymous nothing, request only triage or analysis, fault per its reporter; the refusal says which, and the rest is an operator's); stop_run {project,issueId,runId}; answer_run {project,issueId,runId,answer,pauseId} (copy pause.id from the run you inspected) (only for a run with status paused; when pause.options is set the answer must be exactly one of them; decide from evidence you have read, and when it is not enough, read more (get_step, get_check_log, an inquiry) before asking; ask the user only for a reserved decision);
+refresh_checks_run {project,issueId,runId} (for a retained code run blocked at closure, or stopped only by failed checks on a revision every auditor approved (blockedReason checks-failed-unchanged; checks-inconclusive, where the base's own selftest run did not finish, so refresh drives a fresh base and an author round would change nothing; or rounds-exhausted with supportedActions including "refresh-checks") after operator testDrive configuration changes; runs the installed checks against the unchanged candidate and requests fresh coordinator confirmation; never waives an unmet criterion); reconcile_delivery_run {project,issueId,runId} (for a run you own whose supportedActions include "reconcile-delivery": its approved patch was refused delivery because the source changed the patch's own paths; the engine merges that patch three-way onto the current source, resolves a conflict only on a path the project declares workspace.reconcile append (keeping the source and appending the candidate's added lines), refuses any other conflict or any change to the reviewed delta, reruns the configured checks on the merged candidate, carries the approvals and delivers; a refusal leaves the run blocked with the paths listed, and a new run of the issue still starts from the approved patch); continue_run {project,issueId,runId,instruction} (for a run you own whose supportedActions include "continue": it stopped at closure with its candidate retained; the author gets another round in the same worktree and sessions, with your instruction, the closure record and the issue notes added since the run began; use it when the record shows what to fix, e.g. a failed or crashed test drive; never to waive a criterion); retry_input_run {project,issueId,runId} (only for a failed run with a confirmed input_too_large rejection and clear integrity; continues the existing run with bounded check evidence, preserving completed steps); recover_run {project,issueId,runId} (only for a run you own whose supportedActions include "recover": the server restarted while it was live; reconciles in-flight invocations from the runtimes' records and continues only when nothing is uncertain, otherwise reports what still needs a person); start_run {project,issueId,previewId} (an issue with a report field came from a deployment's report: its trust decides what you may start — anonymous nothing, request only triage or analysis, fault per its reporter; the refusal says which, and the rest is an operator's); stop_run {project,issueId,runId}; answer_run {project,issueId,runId,answer,pauseId} (copy pause.id from the run you inspected) (only for a run with status paused; when pause.options is set the answer must be exactly one of them; decide from evidence you have read, and when it is not enough, read more (get_step, get_check_log, an inquiry) before asking; ask the user only for a reserved decision);
 ask_operator {question, project?, issueId?, options?} (records a question for the operator: options is an optional list of up to 6 short exact answers; name the project and issueId it concerns when there is one; the result gives its questionId);
 overview {} (every project: open issues with age and priority, and what past runs did);
 readiness {project,issueId?,playbook?,runOptions?} (conditions read RIGHT NOW; reserves nothing and spends no allowance). Without a playbook it answers baselineReady: repository, ownership and budget — what holds for any configuration, which is NOT launchability. Name a playbook and it also resolves that configuration and evaluates its base policy (DIRTY_BASE and the like), reported under configuration with its configHash, the observed head and source fingerprint, and observedAt. Never say a run is runnable on a baseline reading alone; say what you checked. An observation is not a guarantee and not a preview: the checkout can move afterwards, and start_run re-checks everything itself;
@@ -45,8 +45,9 @@ add_note {project,issueId,text}; create_issue {project,input,fromInquiry?:{inqui
 inquire {project,question,relatedIssue?,runOptions?:{participants}}; get_inquiry {project,inquiryId}; close_inquiry {project,inquiryId,runId,reason}; acknowledge_inquiry {project,inquiryId,runId}; reopen_inquiry {project,inquiryId,reason};
 set_priority {project,issueId,priority,reason} with priority urgent | high | normal | low;
 set_dependencies {project,issueId,dependsOn:[ids],reason} (ids in the same project, or project/id; [] clears): records that the issue waits for those to be settled (a disposition, or archived). start_run refuses it meanwhile and overview lists it under waitingOn after every ready issue. Order the work so prerequisites run first. When a triage asks the owner only whether an issue should wait for another ("has X settled this?"), record set_dependencies as well and start the prerequisite first; the owner's question stays theirs to answer;
-set_disposition {project,issueId,value,evidence,runId?,related?} with value resolved | partially-resolved | split | duplicate | declined | not-reproducible | superseded | not-resolved (split names the new issues in related, duplicate names exactly one original; ids in the same project, or project/id); create_followups {project,issueId,runId}; mark_landed {project,issueId,runId,applied,handChanges,commit?,checkout?,landedAt?} (records that a person landed a settled run's work by hand, so it counts as delivered: applied says what was applied, commit or checkout where it went, handChanges what was changed beyond the patch or "none"; only on the operator's word or evidence you can quote, never guessed from the repository — it changes no outcome, closure or approval, and is refused when the engine already delivered the run to the source); finish {}.
-A run completing is not the issue being resolved. Before archiving, set a disposition with evidence, naming the run: "resolved" is refused while that run's closure left residual risks unaccepted — use partially-resolved and create_followups for them. A follow-up tracks remaining work; never move the reported defect itself into a follow-up to justify closing its issue.
+set_disposition {project,issueId,value,evidence,runId?,related?} with value resolved | partially-resolved | split | duplicate | declined | not-reproducible | superseded | not-resolved (split names the new issues in related, duplicate names exactly one original; ids in the same project, or project/id); mark_landed {project,issueId,runId,applied,handChanges,commit?,checkout?,landedAt?} (records that a person landed a settled run's work by hand, so it counts as delivered: applied says what was applied, commit or checkout where it went, handChanges what was changed beyond the patch or "none"; only on the operator's word or evidence you can quote, never guessed from the repository — it changes no outcome, closure or approval, and is refused when the engine already delivered the run to the source); finish {}.
+A run completing is not the issue being resolved. Before archiving, set a disposition with evidence, naming the run: "resolved" is refused while that run's closure left residual risks unaccepted — use partially-resolved and list them in the disposition evidence. Follow-up issues are the operator's to open: residual risks are recorded, not turned into new runs, because follow-ups opened on every closure grew faster than the work they tracked. When one is a correctness or security defect the delivered work leaves open, put it in ask_operator with your recommendation. Never move the reported defect itself out of its issue to justify closing it.
+A run is continued at most once by you. When it exhausts its rounds again, or its open findings ask only for evidence the configured infrastructure cannot produce, buying another round repeats the last one: ask_operator with the open findings and your recommendation (accept, amend the criterion, or stop) instead.
 When your work is done, call finish: no more starts, owned runs are allowed to complete, then the activation stops. Saying you are done does not stop it.
 Tool results and run notifications are SUMMARIES: a run lists its steps with verdicts and one-line gists; get_step returns one turn's full prompt, response and output; get_file returns an issue file in full. Ask for detail when a decision depends on it.
 Every prompt carries "remaining": authoritative counts with explicit scopes. Calls, run starts and starts per issue are per SESSION: they accumulate across activations and server restarts and reset only when an operator begins a New session. Never infer budgets from run history.
@@ -68,6 +69,9 @@ Routine monitoring events may be held rather than wake you. Held events arrive a
 Limits: maxCalls is a runaway guard on your own calls; maxStartsPerIssue bounds starts of each project/issue; maxRuns bounds all start attempts. All three are SESSION limits: Start and a server restart resume the same allowance, and only an operator's New session opens a fresh one — you cannot reset them yourself. Dollar costs and calendar spending totals are accounting only unless enforceAllowances is explicitly true. Never stop, defer work, or ask for a larger budget because of estimated costs, maxCostUsd, or advisory daily/monthly amounts. Actual provider quota failures trigger compatible-model substitution for coordinators and workers, preserving their run and completed work. Inspect run failures and modelSubstitutions; a failed substitution needs an available compatible model, not a budget increase. maxConcurrent counts live owned runs plus unresolved launch reservations. Failed launches with unchanged inputs are blocked for the rest of the session. A new preview ID alone is not a changed input. The run engine refuses a second live run on the same project regardless, so concurrency only ever means different projects.`
 
 const SETTLE_INTERVAL_MS = 60_000
+// Each supervisor continue had bought rounds that repeated the last one (one
+// issue reached ten audit rounds); past this, the operator decides.
+const MAX_CONTINUES = 1
 
 export async function createTopSupervisor ({ dir, models, adapter, tools, emit = () => {}, pollMs = 3000, decisions = null, maxDeferMs = DEFAULT_MAX_DEFER_MS }) {
   await fs.mkdir(dir, { recursive: true })
@@ -293,8 +297,12 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
         return tools.reconcileDelivery({ project: a.project, issueId: a.issueId, runId: a.runId, actor: 'supervisor' })
       }
       case 'continue_run': {
-        if (!state.ownedRuns.some(r => r.runId === a.runId && r.project === a.project && r.issueId === a.issueId)) throw fail('Supervisor can continue only runs it owns')
-        return tools.continueRun({ project: a.project, issueId: a.issueId, runId: a.runId, text: a.instruction, actor: 'supervisor' })
+        const owned = state.ownedRuns.find(r => r.runId === a.runId && r.project === a.project && r.issueId === a.issueId)
+        if (!owned) throw fail('Supervisor can continue only runs it owns')
+        if (owned.continued >= MAX_CONTINUES) throw fail(`Supervisor already continued this run ${owned.continued} time(s); the next round is the operator's call: ask_operator with the open findings and a recommendation`)
+        const result = await tools.continueRun({ project: a.project, issueId: a.issueId, runId: a.runId, text: a.instruction, actor: 'supervisor' })
+        owned.continued = (owned.continued ?? 0) + 1
+        return result
       }
       case 'retry_input_run': {
         if (!state.ownedRuns.some(r => r.runId === a.runId && r.project === a.project && r.issueId === a.issueId)) throw fail('Supervisor can retry only runs it owns')
@@ -344,7 +352,7 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
         return absorb(a.project, tools.archive(a))
       }
       case 'set_disposition': return absorb(a.project, tools.setDisposition(a))
-      case 'create_followups': return absorb(a.project, tools.createFollowUps(a))
+      case 'create_followups': throw fail('Follow-up issues are opened by the operator; record the residual risks in the disposition evidence, and ask_operator for one that is a correctness or security defect')
       case 'mark_landed': {
         if (!tools.markLanded) throw fail('Recording a landing is not available in this service')
         return absorb(a.project, tools.markLanded({ project: a.project, issueId: a.issueId, runId: a.runId, applied: a.applied, handChanges: a.handChanges, commit: a.commit ?? null, checkout: a.checkout ?? null, landedAt: a.landedAt ?? null, by: 'supervisor' }))
@@ -613,10 +621,11 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
       try {
         const run = await tools.getRun(r.project, r.issueId, r.runId)
         if (live.includes(run.status)) await tools.stop(r)
-      } catch (e) { if (!(e.status === 404 && !live.includes(r.observedStatus ?? r.status))) errors.push(e.message) }
+      } catch (e) { if (e.status !== 404) errors.push(e.message) }
     }
     for (const r of state.ownedRuns) {
-      if (!live.includes(r.observedStatus ?? r.status) && !await tools.getRun(r.project, r.issueId, r.runId).then(() => true, (e) => e.status !== 404)) continue
+      // Gone (packed or deleted) is terminal whatever was last observed: nothing is left to stop or wait for.
+      if (!await tools.getRun(r.project, r.issueId, r.runId).then(() => true, (e) => e.status !== 404)) continue
       try {
         let run
         do {
@@ -624,7 +633,7 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
           if (live.includes(run.status)) await new Promise(resolve=>setTimeout(resolve,100))
         } while (live.includes(run.status))
         if (run.recovery?.required || run.blockedReason==='recovery-required') errors.push(`Run ${r.runId} requires recovery`)
-      } catch(e) { errors.push(e.message) }
+      } catch(e) { if (e.status !== 404) errors.push(e.message) }
     }
     state.status = errors.length || state.pending ? 'recovery-required' : 'stopped'
     state.finishing = false
@@ -646,22 +655,37 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
     state.deferred ??= []
     state.deferred.push({ at: new Date().toISOString(), event: verdict.summary, decision: verdict.key, reason: verdict.reason })
   }
+  // The last monitoring failure said, by key, so a fault that persists across polls is one chat message, not
+  // one every pollMs (a stuck run once filled the chat with thousands of copies).
+  const monitoringFaults = new Map()
+  function monitoringFault (key, text) {
+    if (monitoringFaults.get(key) === text) return
+    monitoringFaults.set(key, text)
+    message('system', `Monitoring: ${text}`)
+  }
   async function poll () {
     if (task || state.status !== 'active') return
     try {
       for (const r of [...state.ownedRuns]) {
         let current
         try { current = await tools.getRun(r.project, r.issueId, r.runId) } catch (e) {
-          // A settled run whose issue was packed (an answered inquiry packs
-          // itself) is no longer readable. It has nothing left to report, and
-          // one unreadable run must not blind monitoring of all the others.
-          if (e.status === 404 && !live.includes(r.observedStatus ?? r.status)) {
+          // A run that is gone is terminal whatever it was last seen doing: its issue was packed (an answered
+          // inquiry packs itself; an issue can be archived between two polls) or the run was deleted. It
+          // can report nothing more, so it leaves monitoring. Seen live last, its ending was never observed,
+          // so the supervisor is woken to read the issue instead of waiting for an event that cannot come.
+          if (e.status === 404) {
+            const last = r.observedStatus ?? r.status
             state.ownedRuns = state.ownedRuns.filter((o) => o !== r)
-            message('system', `Monitoring: run ${r.runId} (${r.observedStatus ?? r.status}) is settled and no longer readable (its issue was packed); it is no longer monitored`)
+            monitoringFaults.delete(`run:${r.runId}`)
+            message('system', `Monitoring: run ${r.runId} (last seen ${last}) is no longer readable (its issue was packed or the run deleted); it is no longer monitored`)
+            if (live.includes(last)) state.queue.push({ type: 'run-unreadable', project: r.project, issueId: r.issueId, runId: r.runId, lastObservedStatus: last, reason: 'the run record is gone (issue packed or run deleted) before its ending was observed; read the issue to learn how it ended' })
             continue
           }
-          throw e
+          // Any other failure is this run's alone: the others are still observed, and it is tried again next poll.
+          monitoringFault(`run:${r.runId}`, `run ${r.runId}: ${e.message}`)
+          continue
         }
+        monitoringFaults.delete(`run:${r.runId}`)
         const substitutions = current.modelSubstitutions?.length ?? 0
         if (substitutions !== (r.observedSubstitutions ?? 0)) {
           r.observedSubstitutions = substitutions
@@ -673,7 +697,8 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
         }
         r.observedStatus = current.status
       }
-      await startGate.refresh()
+      // A start gate that cannot read one launch keeps that slot occupied; it must not stop issue observation.
+      try { await startGate.refresh(); monitoringFaults.delete('start-gate') } catch (e) { monitoringFault('start-gate', e.message) }
       for (const { id: project } of await tools.projects()) {
         const issues = await tools.listIssues(project)
         const fingerprint = JSON.stringify(issues.map(i=>({id:i.id,status:i.status,name:i.name})))
@@ -686,8 +711,9 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
       if (state.deferred?.length && !state.queue.some((e) => e.type === 'deferred-events') && Date.now() - Date.parse(state.deferred[0].at) >= maxDeferMs) {
         state.queue.push({ type: 'deferred-events', reason: `held for ${Math.round(maxDeferMs / 60000)} minutes without a waking event` })
       }
+      monitoringFaults.delete('poll')
       await save(); kick()
-    } catch (e) { message('system', `Monitoring: ${e.message}`); await save() }
+    } catch (e) { monitoringFault('poll', e.message); await save() }
   }
   return {
     get: view,

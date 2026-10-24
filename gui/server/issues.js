@@ -15,6 +15,7 @@ import { unrecordedCleanup, unrecordedRefusal } from './runtime/cleanup-barrier.
 import { ARCHIVE_FILE, archiveState, requireUnarchived } from './issue-archive.mjs'
 import { bundleFiles, deletePacked, packIssue, packedRuns, packedSummaries, packedSummary, unpackIssue } from './issue-bundle.mjs'
 import { openedBy as openedByRecord, derivedOpenedBy } from './opened-by.mjs'
+import { brief, families } from './issue-family.mjs'
 
 /*
  * File-backed issue storage, keyed by the project an issue was discovered in.
@@ -308,7 +309,16 @@ export async function listIssues (project, { archived = false } = {}) {
     entries.filter((entry) => entry.isDirectory()).map((entry) => readIssue(project, entry.name))
   )
 
-  const listed = issues.filter(Boolean).filter((issue) => issue.archived === archived)
+  // Family links are read across both tabs, so an active child still names its archived parent.
+  const family = families(issues.filter(Boolean), project)
+  // Archiving packs an issue out of the folders: a parent missing here is looked up on its own, so a child can
+  // still name it. Only missing parents are read; the whole archive is not.
+  for (const parent of new Set([...family.values()].filter((f) => f.parent && !f.parent.known && f.parent.project === project).map((f) => f.parent.id))) {
+    const packed = ISSUE_PATTERN.test(parent) ? await packedSummary(ISSUES_DIR, project, parent).catch(() => null) : null
+    if (!packed) continue
+    for (const f of family.values()) if (f.parent?.id === parent && f.parent.project === project) Object.assign(f.parent, { known: true, name: packed.issue?.name ?? null, packed: true })
+  }
+  const listed = issues.filter(Boolean).filter((issue) => issue.archived === archived).map((issue) => ({ ...issue, family: family.get(`${project}/${issue.id}`) }))
   if (archived) {
     // Packed issues are no longer folders here; their summaries stand in.
     const present = new Set(listed.map((i) => i.id))
@@ -317,6 +327,31 @@ export async function listIssues (project, { archived = false } = {}) {
     }
   }
   return listed.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+}
+
+/**
+ * One issue's family (issue-family.mjs) with every member described, packed issues included, so the issue
+ * page can show children and prerequisites a list scan leaves nameless. A cross-project parent or
+ * prerequisite is read on its own; one that cannot be read is listed by id with `missing: true`.
+ */
+export async function issueFamily (project, id) {
+  const issue = await getIssue(project, id)
+  const all = [...await listIssues(project), ...await listIssues(project, { archived: true })]
+  if (!all.some((i) => i.id === id)) all.push(issue)
+  const links = families(all, project).get(`${project}/${id}`)
+  const named = new Map(all.map((i) => [`${i.project ?? project}/${i.id}`, i]))
+  const describe = async (p, i) => {
+    const found = named.get(`${p}/${i}`) ?? await getIssue(p, i).catch(() => null)
+    return found ? brief({ project: p, ...found }) : { project: p, id: i, missing: true }
+  }
+  const from = issue.openedBy?.from
+  return {
+    parent: from?.issueId ? { ...await describe(from.project ?? project, from.issueId), via: from.via, runId: from.runId ?? null } : null,
+    children: await Promise.all(links.children.map((c) => describe(project, c))),
+    dependsOn: await Promise.all((issue.dependsOn?.issues ?? []).map((d) => describe(d.project, d.id))),
+    dependsOnReason: issue.dependsOn?.reason ?? null,
+    blocks: await Promise.all(all.filter((i) => (i.dependsOn?.issues ?? []).some((d) => d.project === project && d.id === id)).map((i) => describe(project, i.id)))
+  }
 }
 
 /**

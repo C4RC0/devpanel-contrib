@@ -21,7 +21,7 @@ export function resumeUnavailable (run) {
  * Resume does not fit there: replaying an unchanged record reaches the same
  * closure again. A run that never recorded a revision has nothing to continue.
  */
-export const CONTINUABLE_BLOCKS = ['closure-conditions-unmet', 'refreshed-checks-failed', 'checks-failed-unchanged']
+export const CONTINUABLE_BLOCKS = ['closure-conditions-unmet', 'refreshed-checks-failed', 'checks-failed-unchanged', 'checks-inconclusive']
 export function continueUnavailable (run) {
   if (run.status !== 'blocked' || !CONTINUABLE_BLOCKS.includes(run.blockedReason)) return 'Only a run stopped at closure can be continued.'
   if (run.abandonment || run.integrity?.status === 'abandoned') return 'This run was abandoned.'
@@ -41,7 +41,7 @@ export function continueUnavailable (run) {
  * environmental failure cannot be fixed by another author round.
  */
 export function checksOnlyBlock (run) {
-  if (run.status !== 'blocked' || !['rounds-exhausted', 'checks-failed-unchanged'].includes(run.blockedReason)) return false
+  if (run.status !== 'blocked' || !['rounds-exhausted', 'checks-failed-unchanged', 'checks-inconclusive'].includes(run.blockedReason)) return false
   const revision = run.revisions?.at(-1)?.fingerprint
   const auditors = Object.keys(run.participants ?? {}).filter((role) => role.startsWith('auditor-'))
   const check = (run.checkResults ?? []).filter((c) => c.revision === revision).at(-1)

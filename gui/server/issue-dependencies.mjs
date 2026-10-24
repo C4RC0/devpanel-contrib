@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getIssue, IssueError } from './issues.js'
 import { writeJson } from './runtime/persistence.mjs'
+import { settled } from './issue-family.mjs'
 
 /*
  * Prerequisites between issues. A run on an issue whose prerequisite is still
@@ -12,10 +13,9 @@ import { writeJson } from './runtime/persistence.mjs'
  * start_run refuses an issue while one is open. An operator may still start
  * it from the panel: the order is management, not a lock.
  *
- * A prerequisite is settled once it has a disposition or is archived.
+ * A prerequisite is settled once it has a disposition or is archived (issue-family.mjs `settled`).
  */
 
-const settled = (issue) => Boolean(issue.disposition || issue.archived || issue.packed)
 
 const parse = (project, ref) => ref.includes('/') ? ref.split('/', 2) : [project, ref]
 
@@ -31,8 +31,10 @@ export async function setIssueDependencies (project, id, { dependsOn, reason, by
     const [p, i] = parse(project, ref)
     if (p === project && i === id) throw new IssueError('an issue cannot depend on itself')
     const dep = await read(p, i).catch(() => { throw new IssueError(`issue ${ref} does not exist`, 404) })
-    // A direct cycle would hold both forever; longer ones are left to people.
-    if ((dep.dependsOn?.issues ?? []).some((d) => d.project === project && d.id === id)) throw new IssueError(`${ref} already depends on this issue`)
+    // A cycle of any length would hold every issue on it forever. Split chains are written automatically
+    // (owner-input.mjs), so a longer cycle is no longer only something a person would notice.
+    const through = await pathBack(dep, { project, id }, read)
+    if (through) throw new IssueError(`${ref} already depends on this issue${through.length ? ` (through ${through.join(' → ')})` : ''}`)
     issues.push({ project: p, id: i })
   }
   const file = path.join(issue.path, 'issue.json')
@@ -41,6 +43,27 @@ export async function setIssueDependencies (project, id, { dependsOn, reason, by
   meta.dependsOn = issues.length ? { issues, reason: reason.trim(), by, at: new Date().toISOString() } : null
   await writeJson(file, meta)
   return read(project, id)
+}
+
+/**
+ * The prerequisites `from` waits for, followed until `target` is reached: the intermediate issues in between
+ * (empty for a direct edge), or null when `target` is not among them. A missing issue ends its branch.
+ */
+async function pathBack (from, target, read, limit = 1000) {
+  const seen = new Set()
+  const walk = async (issue, trail) => {
+    for (const d of issue.dependsOn?.issues ?? []) {
+      if (d.project === target.project && d.id === target.id) return trail
+      const key = `${d.project}/${d.id}`
+      if (seen.has(key) || seen.size >= limit) continue
+      seen.add(key)
+      const next = await read(d.project, d.id).catch(() => null)
+      const found = next && await walk(next, [...trail, d.project === target.project ? d.id : key])
+      if (found) return found
+    }
+    return null
+  }
+  return walk(from, [])
 }
 
 /** The prerequisites of `issue` that are not settled yet, with their names. `getIssue` is injectable for tests. */

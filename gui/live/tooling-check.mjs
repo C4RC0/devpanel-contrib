@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 import { resolveProjectPath } from '../server/project-path.mjs'
 import { exportProject } from '../server/runtime/selection.mjs'
+import { materializeExport } from './materialize-export.mjs'
 import { ensureMountPoint, resolveMounts } from '../server/runtime/tooling-mounts.mjs'
 import { ISOLATION_INHERITED, ISOLATION_UNAVAILABLE, OFFLINE, renderToolingCommand } from '../server/runtime/tooling-commands.mjs'
 import { calls } from './read-fence-check.mjs'
@@ -116,6 +117,8 @@ export async function runToolingCheck ({ adapter, harnessId, model, root, projec
   const worktree = path.join(root, 'worktree'), scratch = path.join(root, 'scratch')
   await fs.mkdir(scratch, { recursive: true })
   await exportProject({ projectPath: checkout, target: worktree })
+  const materialized = await materializeExport({ worktree, checkout, workspace: project.workspace })
+  if (materialized.length) stage('links materialized as in a run', 'pass', { detail: materialized.join(', ') })
   const fenceMounts = []
   for (const m of mounts) fenceMounts.push({ source: m.sourceReal, target: await ensureMountPoint(worktree, m.target) })
 

@@ -5,10 +5,11 @@ import { engineFixture, scriptFor } from './fakes/fixture.mjs'
 import { startRun, releaseWorkspace } from '../server/runtime/launch.mjs'
 import { resolvePlaybook } from '../server/config/load.mjs'
 import { checksOnlyBlock } from '../server/runtime/run-control.mjs'
+import { supportedActions } from '../server/supervisor.mjs'
 import { explainRun } from '../server/runtime/run-explanation.mjs'
 import { renderResult } from '../server/run-result-step.mjs'
 import { infrastructureErrors } from '../server/infrastructure.mjs'
-import { outputParts, compareFailures, failureFingerprints, gatingResult, selftestReport, failedSelftests, compareSelftestReports, isSelftestReport } from '../server/runtime/baseline-failures.mjs'
+import { outputParts, compareFailures, failureFingerprints, gatingResult, inconclusiveBase, selftestReport, failedSelftests, compareSelftestReports, isSelftestReport } from '../server/runtime/baseline-failures.mjs'
 
 export const name = 'inherited check failures — baseline-known failures do not block, new ones do'
 
@@ -329,6 +330,20 @@ export default async function (t) {
     t.eq('failures listed and no base: not-made', (await compareReports('', collected('r2', report([OLD])), { base: false })).verdict, 'not-made')
     t.eq('failures listed and an unreadable base report: not-made', (await compareReports('garbage', collected('r2', report([OLD])))).verdict, 'not-made')
     t.eq('the candidate\'s report unreadable: not-made', (await compareReports(collected('r1', report([OLD])), 'garbage')).verdict, 'not-made')
+    const crashed = [{ test: 'worker/(suite)', error: 'RPC call timed out after 900002ms' }, { test: '(suite-busy)', error: 'A selftest suite is still running' }]
+    const incomplete = await compareReports(collected('r1', report(crashed)), collected('r2', report([OLD])))
+    t.eq('a base whose suite did not complete: not-made, not new-failures', [incomplete.verdict, incomplete.newFailures], ['not-made', []])
+    t.ok('and the reason names the unfinished suite', /did not complete \(worker\/\(suite\), \(suite-busy\)\)/.test(incomplete.reason), incomplete.reason)
+    t.eq('it is marked as caused by the base alone', incomplete.baseUnfinished, true)
+    t.eq('an unreadable base is not-made without that mark', (await compareReports('garbage', collected('r2', report([OLD])))).baseUnfinished, undefined)
+    const passedWith = (selftest, extra = {}) => ({ result: 'passed', baselineComparison: { selftest }, ...extra })
+    t.eq('inconclusiveBase: a passed drive whose only fault is the unfinished base', inconclusiveBase(passedWith(incomplete)), true)
+    t.eq('but the gate still fails it', gatingResult(passedWith(incomplete)), 'failed')
+    t.eq('not for a not-made of another cause', inconclusiveBase(passedWith({ verdict: 'not-made', reason: 'x' })), false)
+    t.eq('not for new failures', inconclusiveBase(passedWith({ verdict: 'new-failures', newFailures: [{ test: 'x' }] })), false)
+    t.eq('not when the drive failed on its own as well', inconclusiveBase({ result: 'failed', baselineComparison: { selftest: incomplete, failures: { verdict: 'new-failures' } } }), false)
+    t.eq('the candidate\'s own suite failure against a complete base is still new', (await compareReports(collected('r1', report([OLD])), collected('r2', report([OLD, crashed[0]])))).verdict, 'new-failures')
+    t.eq('an unfinished base still recognises what it did see as inherited', (await compareReports(collected('r1', report([OLD, ...crashed])), collected('r2', report([OLD])))).verdict, 'baseline-known')
     t.eq('the collector itself failed: not-applicable, the byte rules judge it', (await compareReports(collected('r1', report([OLD])), 'no report', { candidatePassed: false })).verdict, 'not-applicable')
   }
 
@@ -357,6 +372,58 @@ export default async function (t) {
     t.eq('the base was captured for the passing check', run.baselineChecks?.length, 1)
     t.ok('and nothing was retried', run.checkResults.every((c) => !c.attempts))
     t.eq('closure records the inherited failure, which did not block', [run.closure?.checks?.selftest?.verdict, run.closure?.checks?.selftest?.baselineKnown?.map((x) => x.test)], ['baseline-known', ['socket — old-test']])
+    await releaseWorkspace(engine)
+  }
+
+  t.section('a base whose selftest run did not finish is driven again, and an inherited failure costs no author round')
+  {
+    // The first base drive reports only suite-level failures (the DKIM run's worker RPC timeout); every later
+    // drive reports the inherited failure. The candidate is told apart by work.txt, which only the author writes.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpanel-unfinished-base-'))
+    temps.push(dir)
+    const marker = path.join(dir, 'crashed')
+    const once = `if ! test -f work.txt && ! test -f ${marker}; then touch ${marker}; t='{"test":"worker/(suite)","error":"RPC call timed out after 900002ms"},{"test":"(suite-busy)","error":"busy"}'; ` +
+      `else t='{"test":"socket — old-test","error":"inherited at '$$'"},{"test":"core/a"}'; fi; ` +
+      'echo "waited: 1 s after the candidate\'s start"; echo "== runtime/log/r$$/threads/App.tester/1/selftest.report"; echo \'  "total": 2,\'; printf \'{\\n  "total": 2,\\n  "tests": [%s]\\n}\\n\' "$t"'
+    const { engine, implementTurns } = await scenario([{ id: 'collect', run: once, report: 'selftest' }])
+    const run = engine.run
+    t.eq('the run completes', `${run.status} ${run.outcome}`, 'completed resolved', `${run.blockedReason} ${JSON.stringify(run.closure?.conditions)}`)
+    t.eq('in one implementation round', implementTurns, 1)
+    t.eq('the unfinished base is kept as evidence, marked, and a second base was driven', run.baselineChecks?.map((b) => Boolean(b.unfinished)), [true, false])
+    t.eq('the inherited failure is baseline-known against the complete base', [run.closure?.checks?.selftest?.verdict, run.closure?.checks?.selftest?.newFailures], ['baseline-known', []])
+    await releaseWorkspace(engine)
+  }
+
+  t.section('a base that stays unfinished after its redrive stops the loop without an author round')
+  {
+    // Every base drive stops early until `healed` exists; the candidate (work.txt) reports one failure the base
+    // never reached.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'devpanel-unfinished-base-'))
+    temps.push(dir)
+    const healed = path.join(dir, 'healed')
+    const always = `if ! test -f work.txt && ! test -f ${healed}; then t='{"test":"worker/(suite)","error":"RPC call timed out after 900002ms"}'; ` +
+      `elif ! test -f work.txt; then t='{"test":"socket — old-test","error":"inherited at '$$'"}'; ` +
+      `else t='{"test":"socket — old-test","error":"inherited at '$$'"},{"test":"core/a"}'; fi; ` +
+      'echo "waited: 1 s after the candidate\'s start"; echo "== runtime/log/r$$/threads/App.tester/1/selftest.report"; echo \'  "total": 2,\'; printf \'{\\n  "total": 2,\\n  "tests": [%s]\\n}\\n\' "$t"'
+    const { engine, implementTurns } = await scenario([{ id: 'collect', run: always, report: 'selftest' }])
+    const run = engine.run
+    t.eq('blocked as inconclusive', `${run.status} ${run.blockedReason}`, 'blocked checks-inconclusive')
+    t.eq('the author was not sent round again', implementTurns, 1)
+    t.eq('two base drives, both unfinished, neither held', run.baselineChecks?.map((b) => Boolean(b.unfinished)), [true, true])
+    t.eq('the history marks the check inconclusive', run.checkHistory?.at(-1)?.inconclusive, true)
+    t.ok('refresh-checks is offered', checksOnlyBlock(run))
+    const said = explainRun(run)
+    t.ok('the explanation says inconclusive, not a regression', /did not finish its tests/.test(said.headline) && /Inconclusive, not a regression/.test(said.detail), JSON.stringify(said))
+    t.eq('refresh-checks and continue are offered, resume is not', supportedActions(run), ['continue', 'refresh-checks', 'start-new'])
+
+    // The drive is fixed: Refresh checks must drive a fresh base, since an unfinished one is never held.
+    await fs.writeFile(healed, '')
+    // The snapshot's own target, so the same targetKey: only the unfinished mark keeps the old bases from being held.
+    await engine.refreshClosureChecks(engine.snapshot.checks.target)
+    await engine.drive()
+    t.eq('with a complete base the run completes', `${engine.run.status} ${engine.run.outcome}`, 'completed resolved', `${engine.run.blockedReason} ${JSON.stringify(engine.run.closure?.conditions)}`)
+    t.eq('the failure is inherited against it', engine.run.closure?.checks?.selftest?.verdict, 'baseline-known')
+    t.eq('still no author round', engine.run.steps.filter((s) => s.stepId === 'implement').length, 1)
     await releaseWorkspace(engine)
   }
 

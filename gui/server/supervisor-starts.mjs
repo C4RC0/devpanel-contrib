@@ -132,43 +132,52 @@ export function createStartGate ({ getState, save, tools, stopping = () => false
   }
 
   async function refresh (state) {
+    // One unreadable run keeps its own slot (below) but does not stop the others being refreshed; the
+    // failures are thrown together once every attempt has been read.
+    const failures = []
     for (const attempt of state.launches) {
-      if (!['started', 'finished'].includes(attempt.status)) continue
-      // An unreadable run is not evidence that a concurrent slot is free.
-      let run
-      try { run = await tools.getRun(attempt.project, attempt.issueId, attempt.runId) } catch (error) {
-        if (attempt.status === 'finished') continue
-        if (error.status === 404 || error.code === 'ENOENT') {
-          if (await tools.wasDeleted?.(attempt)) {
-            attempt.status='finished'; attempt.runStatus='deleted'; attempt.retirement={at:new Date().toISOString(),reason:'Verified issue deletion receipt'}
-            const owned=state.ownedRuns.find(r=>r.runId===attempt.runId && issueKey(r)===issueKey(attempt))
-            if(owned)owned.status='deleted'
-          } else {
-            attempt.status='uncertain'; attempt.error='Previously started run is missing; reconcile its retirement before releasing this slot'
-          }
-          continue
-        }
-        throw error
-      }
-      if (!run?.status) throw fail(`Cannot establish the state of owned run ${attempt.runId}`)
-      attempt.runStatus = run.status
-      const owned = state.ownedRuns.find((r) => r.runId === attempt.runId && r.project === attempt.project && r.issueId === attempt.issueId)
-      if (owned) owned.status = run.status
-      const failure = ['failed', 'blocked'].includes(run.status) ? (run.blockedReason ?? run.status) : null
-      if (failure && attempt.failureObserved !== failure) recordFailure(state, attempt, failure)
-      attempt.failureObserved = failure
-      if (!live.includes(run.status)) {
-        // A run that has stopped has a final cost. Settling here, where its
-        // outcome is first observed, keeps the window's committed money equal to
-        // what was actually spent rather than to what was feared.
-        if (attempt.status !== 'finished') await settleRun(attempt, run)
-        attempt.status = 'finished'
-      } else attempt.status = 'started'
+      try { await refreshAttempt(state, attempt) } catch (error) { failures.push(`${attempt.runId}: ${error.message}`) }
     }
+    if (failures.length) throw fail(`Cannot establish the state of owned runs: ${failures.join('; ')}`)
+  }
+
+  async function refreshAttempt (state, attempt) {
+    if (!['started', 'finished'].includes(attempt.status)) return
+    // An unreadable run is not evidence that a concurrent slot is free.
+    let run
+    try { run = await tools.getRun(attempt.project, attempt.issueId, attempt.runId) } catch (error) {
+      if (attempt.status === 'finished') return
+      if (error.status === 404 || error.code === 'ENOENT') {
+        if (await tools.wasDeleted?.(attempt)) {
+          attempt.status='finished'; attempt.runStatus='deleted'; attempt.retirement={at:new Date().toISOString(),reason:'Verified issue deletion receipt'}
+          const owned=state.ownedRuns.find(r=>r.runId===attempt.runId && issueKey(r)===issueKey(attempt))
+          if(owned)owned.status='deleted'
+        } else {
+          attempt.status='uncertain'; attempt.error='Previously started run is missing; reconcile its retirement before releasing this slot'
+        }
+        return
+      }
+      throw error
+    }
+    if (!run?.status) throw fail(`Cannot establish the state of owned run ${attempt.runId}`)
+    attempt.runStatus = run.status
+    const owned = state.ownedRuns.find((r) => r.runId === attempt.runId && r.project === attempt.project && r.issueId === attempt.issueId)
+    if (owned) owned.status = run.status
+    const failure = ['failed', 'blocked'].includes(run.status) ? (run.blockedReason ?? run.status) : null
+    if (failure && attempt.failureObserved !== failure) recordFailure(state, attempt, failure)
+    attempt.failureObserved = failure
+    if (!live.includes(run.status)) {
+      // A run that has stopped has a final cost. Settling here, where its
+      // outcome is first observed, keeps the window's committed money equal to
+      // what was actually spent rather than to what was feared.
+      if (attempt.status !== 'finished') await settleRun(attempt, run)
+      attempt.status = 'finished'
+    } else attempt.status = 'started'
   }
 
   return {
-    refresh: () => serial(async () => { await refresh(getState()); await save() }),
+    // Saved even when one launch could not be read: the others' refreshed state must not be lost with it.
+    refresh: () => serial(async () => { try { await refresh(getState()) } finally { await save() } }),
     start: async (preview) => {
       const attempt = await serial(async () => {
         const state = getState()

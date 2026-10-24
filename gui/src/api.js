@@ -56,6 +56,8 @@ export const api = {
   integrationTarget: (project, id, runId) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/integration-target`),
   setDisposition: (project, id, payload) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/disposition`, { method: 'POST', body: JSON.stringify(payload) }),
   setPriority: (project, id, payload) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/priority`, { method: 'POST', body: JSON.stringify(payload) }),
+  /** Parent, children, prerequisites and dependents of one issue (server/issue-family.mjs). */
+  issueFamily: (project, id) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/family`),
   issueStats: (project, id) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/stats`),
   createFollowUps: (project, id, runId, actor) => request(`/api/projects/${enc(project)}/issues/${enc(id)}/runs/${enc(runId)}/followups`, { method: 'POST', body: JSON.stringify({ actor }) }),
   finishSupervisor: () => request('/api/supervisor/finish', { method: 'POST' }),

@@ -308,6 +308,9 @@ function jsonEnd (text) {
   return text.length
 }
 
+/** A tester entry for a whole suite or thread, not one test: the last name segment is parenthesised. */
+const isSuiteLevel = (test) => /(^|\/)\([a-z-]+\)$/.test(test)
+
 /** The names of the report's failed tests (a name that failed once is failed). */
 export function failedSelftests (report) {
   const state = new Map()
@@ -321,6 +324,30 @@ export function failedSelftests (report) {
   return [...state].filter(([, s]) => s === 'FAIL').map(([test]) => test)
 }
 
+async function readReport (runDir, check, id) {
+  const c = (check?.commands ?? []).find((x) => x.id === id)
+  if (!c) return { error: 'did not run' }
+  if (!c.passed) return { failed: true }
+  const stdout = await fs.readFile(path.join(runDir, check.dir ?? '', `${id}.stdout`), 'utf8').catch(() => null)
+  return stdout === null ? { error: 'its output could not be read' } : selftestReport(stdout)
+}
+
+/**
+ * The suite-level failures ("worker/(suite)", "(suite-busy)") in a check's
+ * declared selftest reports: non-empty means some suite never ran, so the check
+ * cannot serve as a complete base. engine.checkCandidate redrives such a base
+ * once and never keeps or caches it.
+ */
+export async function unfinishedSuites ({ runDir, target, check }) {
+  const declared = [...(target?.commands ?? []), ...(target?.finallyCommands ?? [])].filter((c) => isSelftestReport(c.report))
+  const found = []
+  for (const { id } of declared) {
+    const r = await readReport(runDir, check, id)
+    if (r.report) found.push(...failedSelftests(r.report).filter(isSuiteLevel))
+  }
+  return found
+}
+
 /**
  * The candidate's selftest failures against the base of the same source
  * revision, or null when no command declares a report. `new-failures` (naming
@@ -332,15 +359,12 @@ export async function compareSelftestReports ({ runDir, target, base, candidate,
   const declared = [...(target?.commands ?? []), ...(target?.finallyCommands ?? [])].filter((c) => isSelftestReport(c.report))
   if (!declared.length) return null
   const record = { verdict: 'none', reason: null, reports: [], newFailures: [], baselineKnown: [],
-    instruction: 'Selftest failures compared with the base by test name. newFailures fail the check and must be fixed or explained by the author; baselineKnown failures occur on the unchanged base too and do not block. not-made means the report could not be read or compared while the candidate lists failures.' }
+    instruction: 'Selftest failures compared with the base by test name. newFailures fail the check and must be fixed or explained by the author; baselineKnown failures occur on the unchanged base too and do not block. not-made means the report could not be read or compared while the candidate lists failures (including a base whose selftest run did not complete): it is not evidence of a regression, and the remedy is a complete base, not a source change.' }
   const notMade = []
-  const read = async (check, id) => {
-    const c = (check?.commands ?? []).find((x) => x.id === id)
-    if (!c) return { error: 'did not run' }
-    if (!c.passed) return { failed: true }
-    const stdout = await fs.readFile(path.join(runDir, check.dir ?? '', `${id}.stdout`), 'utf8').catch(() => null)
-    return stdout === null ? { error: 'its output could not be read' } : selftestReport(stdout)
-  }
+  // How many of the not-made reasons are an unfinished base and nothing else: then the comparison is
+  // inconclusive for a reason outside the candidate (inconclusiveBase), not a report it failed to produce.
+  let unfinishedBase = 0
+  const read = (check, id) => readReport(runDir, check, id)
   for (const { id } of declared) {
     const cand = await read(candidate, id)
     if (cand.failed) { record.reports.push({ command: id, verdict: 'not-applicable' }); continue }
@@ -353,15 +377,36 @@ export async function compareSelftestReports ({ runDir, target, base, candidate,
     if (b.failed || b.error) { notMade.push(`${id}: on the base, ${b.error ?? 'the command failed'}`); continue }
     const known = new Set(failedSelftests(b.report))
     const fresh = failed.filter((test) => !known.has(test))
+    // A suite-level entry on the base ("worker/(suite)" after an RPC timeout, "(suite-busy)", "admin/(thread-ready)")
+    // means some suite there never ran, so a failure absent from the base may simply not have been reached: the
+    // comparison cannot call it new. DKIM run 2026-10-17 was refused twice on two inherited failures this way.
+    const unfinished = [...known].filter(isSuiteLevel)
+    if (fresh.length && unfinished.length) {
+      notMade.push(`${id}: the base selftest run did not complete (${unfinished.join(', ')}), so ${fresh.length} candidate ${fresh.length === 1 ? 'failure' : 'failures'} cannot be judged new or inherited`)
+      unfinishedBase++
+      continue
+    }
     record.newFailures.push(...fresh.map((test) => ({ command: id, test })))
     record.baselineKnown.push(...failed.filter((test) => known.has(test)).map((test) => ({ command: id, test })))
     record.reports.push({ command: id, path: cand.path, failed: failed.length, verdict: fresh.length ? 'new-failures' : 'baseline-known' })
   }
   if (record.newFailures.length) { record.verdict = 'new-failures'; record.reason = `${record.newFailures.length} selftest ${record.newFailures.length === 1 ? 'failure does' : 'failures do'} not occur on the base` }
-  else if (notMade.length) { record.verdict = 'not-made'; record.reason = notMade.join('; ') }
+  else if (notMade.length) { record.verdict = 'not-made'; record.reason = notMade.join('; '); if (unfinishedBase === notMade.length) record.baseUnfinished = true }
   else if (record.baselineKnown.length) record.verdict = 'baseline-known'
   else if (record.reports.length && record.reports.every((r) => r.verdict === 'not-applicable')) record.verdict = 'not-applicable'
   return record
+}
+
+/**
+ * Whether `check` fails the gate only because the base's selftest run did not finish (`baseUnfinished`): without
+ * the selftest comparison it would pass. Such a result says nothing about the candidate. The review loop stops
+ * on it (`checks-inconclusive`) instead of giving the author a round, and Refresh checks drives a fresh base,
+ * since an unfinished base is never kept or cached (engine.checkCandidate).
+ */
+export function inconclusiveBase (check, run) {
+  const selftest = check?.baselineComparison?.selftest
+  if (selftest?.verdict !== 'not-made' || !selftest.baseUnfinished) return false
+  return gatingResult({ ...check, baselineComparison: { ...check.baselineComparison, selftest: null } }, run) === 'passed'
 }
 
 /** Whether a check's selftest reports name a failure it may not pass over. */

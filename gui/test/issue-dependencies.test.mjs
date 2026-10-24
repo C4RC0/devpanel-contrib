@@ -54,6 +54,17 @@ export default async function (t) {
     t.eq('an empty list clears', cleared.dependsOn, null)
   }
 
+  t.section('a cycle of any length is refused')
+  {
+    const g = await engineFixture({})
+    const get = (p, i) => g.issues.getIssue(p, i)
+    const [a, b, c] = [g.issue, await g.issues.createIssue(P, { name: 'B' }), await g.issues.createIssue(P, { name: 'C' })]
+    await setIssueDependencies(P, a.id, { dependsOn: [b.id], reason: 'x' }, { getIssue: get })
+    await setIssueDependencies(P, b.id, { dependsOn: [c.id], reason: 'x' }, { getIssue: get })
+    const threw = await refusal(() => setIssueDependencies(P, c.id, { dependsOn: [a.id], reason: 'x' }, { getIssue: get }))
+    t.ok('naming the way round', threw?.message?.includes(`through ${b.id}`), threw?.message)
+  }
+
   t.section('the supervisor records a dependency and is refused a start while it is open')
   {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sup-deps-'))

@@ -193,6 +193,19 @@ export function baselineCacheFor ({ target, targetKey, baseCommit, issuePath, ru
       if (hit) cache.verified = identity.key
       return hit
     },
+    /**
+     * Drop the entry this check hit, when it proved unusable (a base whose selftest run did not finish, stored
+     * before such bases were refused). Left in place, every later run would hit it, drive again, and still
+     * be unable to store the complete base under the same key. A reader copying it at that moment fails its
+     * manifest check and misses: a lookup is never trusted without it.
+     */
+    async discard () {
+      const key = cache.verified
+      if (!key) return
+      await fs.rm(path.join(dir, key), { recursive: true, force: true }).catch(() => {})
+      cache.verified = null
+      cache.status = { state: 'discarded', key, reason: 'the cached base did not finish its selftest run' }
+    },
     async store (base) {
       const [first, after] = [await cache.identity(), await read()]
       if (first.error || after.error) { cache.status = { state: 'unavailable', reason: first.error ?? after.error }; return }

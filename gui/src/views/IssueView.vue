@@ -15,6 +15,7 @@ import CoordinatorChat from '@/components/CoordinatorChat.vue'
 import SupervisorQuestion from '@/components/SupervisorQuestion.vue'
 import CopyPath from '@/components/CopyPath.vue'
 import IssueStats from '@/components/IssueStats.vue'
+import IssueFamily from '@/components/IssueFamily.vue'
 import PatchCheck from '@/components/PatchCheck.vue'
 import ContinueRun from '@/components/ContinueRun.vue'
 import { api } from '@/api'
@@ -621,8 +622,6 @@ function stillOnIssue (location) {
 const issueVersion = ref(0)
 // Open questions the top-level supervisor asked about this issue (ask_operator).
 const supervisorQuestions = ref([])
-// How an issue came out of another one (issue.openedBy.from.via).
-const OPENED_VIA = { 'follow-up': 'follow-up of', split: 'split from', inquiry: 'proposed by inquiry', finding: 'finding of' }
 async function loadSupervisorQuestions (location) {
   try {
     const all = await api.supervisorQuestions()
@@ -873,10 +872,6 @@ watch(() => route.query.run, (runId) => {
             <v-chip v-for="tag in reportTags(issue.report, issue.openedBy?.host ? `${issue.openedBy.user}@${issue.openedBy.host}` : issue.openedBy?.user)" :key="tag.key"
                     size="x-small" variant="tonal" :color="tag.color" :title="tag.title"><v-icon :icon="tag.icon" size="12" class="mr-1" />{{ tag.text }}</v-chip>
             <span>opened {{ issue.openedOn }}<template v-if="issue.openedBy?.user"> by <strong :title="issue.openedBy.derived ? 'read from the issue\'s own record; it was opened before openers were recorded' : ''">{{ issue.openedBy.host ? `${issue.openedBy.user}@${issue.openedBy.host}` : issue.openedBy.user }}</strong></template></span>
-            <span v-if="issue.openedBy?.from">
-              {{ OPENED_VIA[issue.openedBy.from.via] ?? 'from' }}
-              <router-link :to="{ path: `/projects/${issue.openedBy.from.project ?? project}/${issue.openedBy.from.issueId}`, query: issue.openedBy.from.runId ? { run: issue.openedBy.from.runId } : {} }">{{ issue.openedBy.from.issueId }}</router-link>
-            </span>
             <span v-if="issue.packed" class="head__packed">
               <v-icon icon="$archive" size="15" /> Archived and packed<template v-if="issue.archive?.bundle"> · {{ formatBytes(issue.archive.bundle.bytes) }} ({{ formatBytes(issue.archive.bundle.unpackedBytes) }} unpacked)</template>
             </span>
@@ -885,6 +880,7 @@ watch(() => route.query.run, (runId) => {
               <span class="head__caret" :class="{ 'head__caret--open': showFolder }">▸</span>
             </button>
           </div>
+          <IssueFamily :project="String(project)" :issue-id="issue.id" />
         </div>
 
         <!-- The issue's own facts, which no run sets. -->

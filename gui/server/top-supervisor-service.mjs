@@ -67,7 +67,17 @@ export async function topSupervisorService ({ issues, supervisor, modelPerforman
   return getRun(issue.path,runId,{issues,project,issueId,isActive:supervisor.isActive(project,issueId)})
  }
  // The supervisor sees summaries; the panel's full view stays behind get_step.
- const detail=async(project,issueId,runId)=>summariseRun(await full(project,issueId,runId))
+ // A packed issue (archived, or an answered inquiry that packed itself) has no run folders, but its bundle keeps every
+ // run record: monitoring and the start gate read the ending and the cost from there, so packing between two polls
+ // is an ordinary ending and not a vanished run. Steps stay in the bundle; restore the issue to read them.
+ const detail=async(project,issueId,runId)=>{
+  const issue=await issues.getIssue(project,issueId)
+  if(!issue.packed)return summariseRun(await full(project,issueId,runId))
+  const record=await issues.readRunRecord(project,issueId,runId)
+  if(!record)throw Object.assign(new Error('no such run'),{status:404})
+  return {runId,project,issueId,packed:true,status:record.status,outcome:record.outcome??null,blockedReason:record.blockedReason??null,
+   budgets:record.budgets??null,modelSubstitutions:record.modelSubstitutions??[],note:'The issue is archived and packed; its steps are in the bundle (restore the issue to read them).'}
+ }
  const mutate=async fn=>{const value=await fn();changed();return value}
  const dir=process.env.DEVPANEL_SUPERVISOR_DIR ?? path.join(issues.ISSUES_DIR,'.supervisor')
  const lock=await acquire(path.join(dir,'.owner.lock'),{purpose:'top-level-supervisor'})

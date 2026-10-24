@@ -9,6 +9,7 @@ import { api } from '@/api'
 import { actorName, proxyUser, rememberedActor } from '@/identity'
 import { loadProjects } from '@/projects'
 import { reportTags } from '@/report-tags'
+import { familyTags, treeRows } from '@/issue-tree'
 import { connection, socket } from '@/socket'
 
 const route = useRoute()
@@ -63,6 +64,21 @@ const BASE_HEADERS = [
 const HEADERS = computed(() => archived.value
   ? [...BASE_HEADERS, { title: '', key: 'actions', width: 60, align: 'end', sortable: false }]
   : BASE_HEADERS)
+
+/* Unsorted, the list is the provenance tree (issue-tree.js); a column sort shows it flat, sorted, and
+   clearing the sort brings the tree back. Collapsed parents are this view's state, not the issue's. */
+const sortBy = ref([])
+const collapsed = ref(new Set())
+// Each row is the issue itself plus `row` (its place in the tree), so column sorts read the issue's fields.
+const rows = computed(() => sortBy.value.length
+  ? issues.value.map((item) => ({ ...item, row: { depth: 0, childCount: 0, ghost: false, key: `${project.value}/${item.id}` } }))
+  : treeRows(issues.value, project.value, collapsed.value).map(({ item, ...row }) => ({ ...item, row })))
+function toggle (row) {
+  const next = new Set(collapsed.value)
+  if (next.has(row.key)) next.delete(row.key)
+  else next.add(row.key)
+  collapsed.value = next
+}
 
 const countLabel = computed(() => {
   const n = issues.value.length
@@ -134,6 +150,7 @@ const BLOCKED_TEXT = {
   'delivery-failed': 'delivery failed',
   'preflight-refused': 'preflight refused',
   'closure-conditions-unmet': 'not closeable',
+  'checks-inconclusive': 'base unfinished',
   'task-incomplete': 'task incomplete'
 }
 // What the newest closed run achieved, in its playbook's words. Never
@@ -153,8 +170,10 @@ function openerTitle (o) {
 }
 
 function tagsFor (item) {
+  if (item.ghost) return [{ key: 'ghost', text: 'not in this list', title: 'The issue these came out of: archived, an inquiry, or in another project' }]
   const tags = []
   tags.push(...reportTags(item.report, opener(item.openedBy)))
+  tags.push(...familyTags(item.family))
   if (item.disposition) {
     const d = item.disposition
     tags.push({ key: 'disposition', text: d.value.replace(/-/g, ' '), color: d.value === 'resolved' ? 'success' : ['not-resolved', 'declined'].includes(d.value) ? 'error' : ['split', 'duplicate'].includes(d.value) ? 'info' : 'warning', title: `Disposition by ${d.by}: ${d.evidence}${d.openRisks?.length ? ` · ${d.openRisks.length} open risk(s)` : ''}` })
@@ -183,8 +202,9 @@ function tagsFor (item) {
 
 function rowProps ({ item }) {
   return {
-    onClick: () => router.push(`/projects/${project.value}/${item.id}`),
-    style: 'cursor: pointer'
+    onClick: () => router.push(`/projects/${item.project ?? project.value}/${item.id}`),
+    style: 'cursor: pointer',
+    class: item.row.ghost ? 'issues__row--ghost' : undefined
   }
 }
 
@@ -229,8 +249,8 @@ watch([project, archived], () => {
     <header class="issues__head">
       <v-icon icon="$projects" size="17" class="issues__head-icon" />
       <h1 class="issues__project">{{ projectLabel }}</h1>
+      <ProjectInfrastructure :project="String(project)" />
     </header>
-    <ProjectInfrastructure :project="String(project)" />
 
     <div class="issues__navigation">
     <v-tabs :model-value="archived ? 'archived' : 'active'" density="compact" class="issues__tabs"
@@ -262,9 +282,10 @@ watch([project, archived], () => {
       <v-data-table
         v-if="!loadError && (issues.length || loading)"
         :headers="HEADERS"
-        :items="issues"
+        v-model:sort-by="sortBy"
+        :items="rows"
         :loading="loading"
-        item-value="id"
+        :item-value="(item) => item.row.key"
         density="comfortable"
         hover
         fixed-header
@@ -279,9 +300,16 @@ watch([project, archived], () => {
         </template>
 
         <template #item.name="{ item }">
+          <div class="issues__node" :style="{ '--depth': item.row.depth }">
+          <v-btn v-if="item.row.childCount" variant="text" size="x-small" density="compact" icon="$chevronRight"
+                 class="issues__toggle" :class="{ 'issues__toggle--open': !collapsed.has(item.row.key) }"
+                 :aria-label="collapsed.has(item.row.key) ? `Show the ${item.row.childCount} issues that came out of this one` : 'Hide the issues that came out of this one'"
+                 :aria-expanded="!collapsed.has(item.row.key)" @click.stop="toggle(item.row)" />
+          <span v-else class="issues__toggle-space" />
+          <div class="issues__node-body">
           <span class="issues__name">{{ item.name }}</span>
           <v-chip
-            v-if="!item.hasMetadata"
+            v-if="!item.hasMetadata && !item.row.ghost"
             size="x-small"
             variant="tonal"
             color="warning"
@@ -296,6 +324,8 @@ watch([project, archived], () => {
               <v-progress-circular v-if="tag.live" indeterminate size="9" width="1.5" class="mr-1" /><v-icon v-else-if="tag.icon" :icon="tag.icon" size="12" class="mr-1" />{{ tag.text }}
             </v-chip>
           </span>
+          </div>
+          </div>
         </template>
 
         <template #item.openedBy="{ item }">
@@ -308,6 +338,7 @@ watch([project, archived], () => {
 
         <template #item.actions="{ item }">
           <v-btn
+            v-if="!item.row.ghost"
             icon="$delete"
             variant="text"
             size="x-small"
@@ -392,6 +423,13 @@ watch([project, archived], () => {
 .issues__tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .issues__tags .v-chip { font-size: 0.6875rem; }
 .issues__table :deep(td) { white-space: normal; }
+/* Provenance depth as indentation; the toggle column keeps names aligned whether or not a row has children. */
+.issues__node { display: flex; align-items: flex-start; gap: 2px; padding-left: calc(var(--depth, 0) * 22px); }
+.issues__node-body { min-width: 0; }
+.issues__toggle { margin-top: -1px; transition: transform 0.12s; }
+.issues__toggle--open { transform: rotate(90deg); }
+.issues__toggle-space { flex: none; width: 24px; }
+.issues__table :deep(.issues__row--ghost) { opacity: 0.55; font-style: italic; }
 .issues {
   height: calc(100dvh - var(--v-layout-top, 60px) - var(--v-layout-bottom, 0px));
   padding: 10px 20px 20px;
@@ -403,6 +441,7 @@ watch([project, archived], () => {
 .issues__head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 4px 2px 10px;
   flex: none;

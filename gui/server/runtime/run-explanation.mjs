@@ -174,6 +174,8 @@ function selftestWords (selftest) {
     const known = selftest.baselineKnown?.length ?? 0
     return `New selftest failures: ${selftest.newFailures.map((x) => x.test).join(', ')}.${known ? ` ${plural(known, 'other selftest failure')} also ${known === 1 ? 'occurs' : 'occur'} on the unchanged project and did not count.` : ''} `
   }
+  // Not a regression: the unchanged project's own selftest run stopped early, so there was nothing to compare with.
+  if (selftest?.verdict === 'not-made' && selftest.baseUnfinished) return `Inconclusive, not a regression: the unchanged project's selftest run did not finish, so the candidate's selftest failures could not be judged new or inherited (${selftest.reason}). `
   if (selftest?.verdict === 'not-made') return `The selftest failures could not be compared with the unchanged project, so none counts as inherited: ${selftest.reason}. `
   return ''
 }
@@ -423,6 +425,12 @@ function blocked (run, outputs, kept) {
       }
       return { ...base, headline: 'Interrupted: the panel restarted while this run was working', cause: run.recovery?.reason ? firstLine(run.recovery.reason) : null,
         next: 'Recover picks up where it stopped. Abandon keeps the work and lets you start fresh.' }
+    case 'checks-inconclusive': {
+      const check = (run.checkResults ?? []).filter((c) => c.revision === run.revisions?.at(-1)?.fingerprint).at(-1)
+      return { ...base, headline: 'Stopped: the reviewers approved, but the comparison base did not finish its tests',
+        detail: `${selftestWords(check?.baselineComparison?.selftest)}The base was driven twice. No author round was spent on it, since no source change can answer it.`,
+        next: 'Refresh checks drives a fresh base and reruns the checks on this candidate. If the base keeps stopping early, look at the staging drive (timeouts, load) first. Continue gives the author a round anyway.' }
+    }
     case 'checks-failed-unchanged':
     case 'rounds-exhausted': {
       // The reviewers agreed; what stopped the loop was the installed checks on the approved revision.

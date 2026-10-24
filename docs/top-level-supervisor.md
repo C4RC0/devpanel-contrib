@@ -157,6 +157,12 @@ next runs. Open questions belong to the session: New session archives them with 
 It accepts chat while a turn is working, wakes when owned runs or the scoped issue queue change, and
 continues without an open browser. A response with no action waits for events
 rather than polling the model. The server polls run state without spending.
+Each owned run is observed on its own: a run that cannot be read is reported
+once and tried again, and never stops the others or the issue scan. A packed
+issue's runs are read from its bundle, so packing between two polls is an
+ordinary ending (status and cost). A run whose record is gone (deleted) leaves
+monitoring; if it was last seen live, a `run-unreadable` event wakes the
+supervisor to read the issue instead.
 Stopping aborts the supervisor and its owned issue runs, waits for termination,
 and retains conversation history. A normal Start with the same model continues the same session. Changing models
 while stopped creates a new native session seeded with the recent conversation;
@@ -184,11 +190,15 @@ supervisor action at all. The supervisor sees the questions or the proposed spli
 in the run summary, tells the user, and does not restart that issue: the owner's
 answer on the issue page starts the next run itself.
 
-Three further actions: `set_disposition {project, issueId, value, evidence,
+Two further actions: `set_disposition {project, issueId, value, evidence,
 runId?}` records the issue's state with evidence (`resolved` is refused while
-the named run left residual risks unaccepted); `create_followups {project,
-issueId, runId}` opens one follow-up issue per unaccepted risk, deduplicated;
-`finish {}` ends the activation gracefully. Archiving is refused until a
+the named run left residual risks unaccepted; the supervisor then records
+`partially-resolved` and lists the risks in the evidence); `finish {}` ends the
+activation gracefully. `create_followups` is refused to the supervisor: opening
+follow-ups on every closure grew issues faster than the work they tracked (51
+of 85 issues by 2026-10-24), so follow-up issues are the operator's, from the
+issue page. A residual risk that is a correctness or security defect goes to
+`ask_operator` with a recommendation. Archiving is refused until a
 disposition exists.
 
 `mark_landed {project, issueId, runId, applied, handChanges, commit?, checkout?,
@@ -613,7 +623,9 @@ Prerequisites are separate from priority: `set_dependencies {project, issueId,
 dependsOn, reason}` (an operator uses `POST …/issues/:id/dependencies`) records
 issues that must be settled first — given a disposition or archived. `start_run`
 refuses the issue while one is open, and `overview` lists it with `waitingOn`
-after every ready issue. An operator may still start it from the panel. The
+after every ready issue. An accepted split already chains its parts in the order
+triage gave (each waits for the one before); `set_dependencies` may loosen or
+replace that. A cycle of any length is refused. An operator may still start it from the panel. The
 overview's `flow7d` per project counts, in issues, those opened, those settled by
 disposition value, and those with a candidate delivered (`deliveredIssues`: a
 completed delivery other than `none`, of a run that recorded a revision, or a
@@ -882,7 +894,11 @@ criterion into a met one.
 `continue_run {project, issueId, runId, instruction}` continues a run it owns that
 stopped at closure (execution-contract.md "Continuing a run stopped at closure"):
 the author gets another round with the instruction, the closure record and the new
-issue notes. It is for a record that shows what to fix, never to waive a criterion.
+issue notes. It is for a record that shows what to fix, never to waive a criterion. The
+supervisor continues a run at most once (`MAX_CONTINUES` in
+`gui/server/top-supervisor.mjs`); a second request is refused and the decision
+(accept, amend the criterion, or stop) goes to the operator through
+`ask_operator`.
 
 `get_check_log {project, issueId, runId, check, command}` reads the bounded tail
 of an engine-recorded command log. `check` is the zero-padded check directory

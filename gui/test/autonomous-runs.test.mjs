@@ -147,6 +147,9 @@ export default async (t) => {
     t.eq('and nothing started', starts.length, 0)
     const issue = await f.issues.getIssue('devpanel-project', f.issue.id)
     t.eq('the original is split, naming them', `${issue.disposition?.value}:${(issue.disposition?.related ?? []).length}`, 'split:2')
+    const [first, second] = out.answer.createdIssues
+    t.eq('the parts are chained in their order', (await f.issues.getIssue('devpanel-project', second)).dependsOn?.issues, [{ project: 'devpanel-project', id: first }])
+    t.eq('the first part waits for nothing', (await f.issues.getIssue('devpanel-project', first)).dependsOn, null)
   }
 
   t.section('7. exhausted rounds: one more round when converging, none otherwise, and nobody is asked')

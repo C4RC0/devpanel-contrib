@@ -396,7 +396,11 @@ documents the HTTP/socket API, issue storage rules, the front-end conventions, a
   budget-blocked supervisor reports whichever fault it last saw. Groupings are by seat·model and by the run's exact resolved `configHash` (on `run.playbook.configHash`, else read
   back from the snapshot), so editing a playbook starts a new group instead of rewriting old statistics.
 - `issue.dependsOn` (`issue-dependencies.mjs`) names prerequisites; the supervisor's `start_run` refuses while one is
-  unsettled (no disposition, not archived) and `overview` shows `waitingOn` and a 7-day `flow7d` per project.
+  unsettled (no disposition, not archived) and `overview` shows `waitingOn` and a 7-day `flow7d` per project. A cycle
+  of any length is refused. An accepted split chains its parts in triage's order (`owner-input.mjs`). Provenance
+  (`openedBy.from`, a tree) and order (`dependsOn`, a graph) are separate: a follow-up or finding is born after its
+  parent's run ended, so it gets no automatic prerequisite. `issue-family.mjs` derives both on read (`family` on list
+  items, `GET …/issues/:id/family`); the list nests children under parents, the issue page shows `IssueFamily.vue`.
 - Run deletion: `DELETE …/runs/:runId` (`supervisor.deleteRun`, operator only; the trash icon on the issue page deletes
   on the click) removes a settled run's workspace (`launch.removeRunWorkspace`, never an in-place checkout), its
   `runs/<id>/` and its step folders, under the issue's run lock; live and paused runs are refused. Step reservations

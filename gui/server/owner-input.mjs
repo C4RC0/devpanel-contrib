@@ -3,6 +3,7 @@ import path from 'node:path'
 import * as store from './runtime/store.mjs'
 import { acquire } from './runtime/lock.mjs'
 import { resolvePlaybook } from './config/load.mjs'
+import { setIssueDependencies } from './issue-dependencies.mjs'
 
 /*
  * The owner's answer to a triage that would not start work (run.ownerInput).
@@ -15,7 +16,8 @@ import { resolvePlaybook } from './config/load.mjs'
  *   2. it becomes material the next run reads: a human note on the issue with
  *      each question and its answer (runtime/current-window.mjs captures notes
  *      as human input), or, for an accepted split, new issues and the `split`
- *      disposition naming them;
+ *      disposition naming them, each part after the first waiting for the one
+ *      before it (triage lists the parts "in the order they should be done");
  *   3. the same playbook starts again with the same run options, unless the
  *      split was accepted. The configuration must still be the one the asking
  *      run resolved (same configHash): a playbook edited since is something
@@ -76,6 +78,14 @@ export function createOwnerInput ({ issues, supervisor, configRoot }) {
           input: `# ${part.title}\n\n${part.scope}\n\nSplit from ${issueId}: triage of run ${runId} judged the whole too large for one run, and the owner accepted this split.${record.note ? `\n\n${record.note}` : ''}\n`
         })
         record.createdIssues.push(created.id)
+      }
+      // A chain rather than per-part order: the split contract states only an order, and with one live run per
+      // project a chain costs no parallelism. People and the supervisor may loosen it with set_dependencies.
+      for (let i = 1; i < record.createdIssues.length; i++) {
+        await setIssueDependencies(project, record.createdIssues[i], {
+          dependsOn: [record.createdIssues[i - 1]], by: 'operator',
+          reason: `Split from ${issueId}: part ${i + 1} of ${record.createdIssues.length}, after part ${i}.`
+        }, { getIssue: issues.getIssue })
       }
       await issues.setIssueDisposition(project, issueId, {
         value: 'split', by: 'operator', runId, related: record.createdIssues,

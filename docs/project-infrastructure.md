@@ -330,7 +330,9 @@ which calls the application's formatter handler (`{ filepath, content }` →
 config). A tool that exists only on the staging host stays in the test drive.
 Prove a project's entries with
 `DEVPANEL_LIVE=1 npm run live -- --harness <h> --model <wire> --tooling --project <id>`
-(one read-only turn; the report under `gui/live/reports/tooling-*` gives each
+(one read-only turn in an export of the checkout whose escaping links are
+materialized as a run's are under `symlinks: materialize`, so a mount target or
+command behind a link is tested as a run meets it; the report under `gui/live/reports/tooling-*` gives each
 mount and command `confirmed`, `refuted` or `not-run`, whether network
 isolation was available in that runtime and of which kind (`isolationMode`:
 `namespace` or `inherited`), and `seatNetwork`, the same 127.0.0.1 probe run in

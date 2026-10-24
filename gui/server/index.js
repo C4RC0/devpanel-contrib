@@ -200,6 +200,11 @@ app.get('/api/projects/:project/issues/:id', route(async (req, res) => {
   res.json(await getIssue(req.params.project, req.params.id))
 }))
 
+// Where the issue came from, what came out of it, and what it waits for or holds up (issue-family.mjs).
+app.get('/api/projects/:project/issues/:id/family', route(async (req, res) => {
+  res.json(await issues.issueFamily(req.params.project, req.params.id))
+}))
+
 for (const action of ['archive', 'restore']) {
   app.post(`/api/projects/:project/issues/:id/${action}`, route(async (req, res) => {
     const { project, id } = req.params

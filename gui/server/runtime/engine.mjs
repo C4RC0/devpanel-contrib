@@ -24,7 +24,7 @@ import { readChat, instructionsFor, instructionsBlock } from './coordinator-chat
 import { extractOutput, describeContract } from './structured-output.mjs'
 import { runChecks, compareWithBaseline } from './checks.mjs'
 import { baselineCacheFor, tierTarget } from './baseline-cache.mjs'
-import { compareFailures, compareSelftestReports, failureFingerprints, gatingResult } from './baseline-failures.mjs'
+import { compareFailures, compareSelftestReports, failureFingerprints, gatingResult, inconclusiveBase, unfinishedSuites } from './baseline-failures.mjs'
 import { carryForwardBrief } from './carry-forward.mjs'
 import { mergeOntoSource, keepCandidate, rebuildReconciled, reconcileUnavailable } from './source-reconcile.mjs'
 import { infrastructureBrief } from '../infrastructure.mjs'
@@ -233,7 +233,10 @@ function reviewProblem (output, policy, prior, expectsPrior, criteria = new Set(
   // A finding against one of the brief's criteria is the auditor saying the
   // work is not done, whatever severity it was given; approving beside it is a
   // contradiction, like approving with a deferred plan finding. Only the
-  // brief's own criteria count: an auditor does not invent one.
+  // brief's own criteria count: an auditor does not invent one. Severity is
+  // deliberately not a gate here: whether a criterion holds and how bad the
+  // defect is are separate questions. Wording-slip rounds are prevented where
+  // the criteria are written (the triage/orient prompts refuse chore criteria).
   const contradicting = (output.findings ?? []).filter((f) => f.contradicts !== undefined)
   const invented = contradicting.filter((f) => !criteria.has(f.contradicts))
   if (invented.length) {
@@ -561,7 +564,14 @@ export function plan (snapshot, steps, outputs, { skip = null, checkResults = []
       if ((review?.verdict === 'approved' || awaitsCheck) && reviewed && ofReviewed.filter(isFull).at(-1)?.result == null && verdictOfChecks !== 'failed' && checksAfterApproval(snapshot) && !continued.has(round)) {
         return { kind: 'checks', revision: reviewed, phase, round }
       }
-      if (review && snapshot.checks?.requirement !== 'none' && verdictOfChecks === 'failed') {
+      // Failed only because the base's selftest run never finished (after its one redrive): nothing the author
+      // could change answers that. Approved, the loop stops for Refresh checks, which drives a fresh base; with
+      // findings of their own the reviewers' round goes ahead, without counting the check against the author.
+      const inconclusive = verdictOfChecks === 'failed' && ofReviewed.at(-1)?.inconclusive === true
+      if (review && snapshot.checks?.requirement !== 'none' && inconclusive) {
+        if (review.verdict === 'approved' && !continued.has(round)) return terminal('checks-inconclusive')
+        checksOnlyFailed = null
+      } else if (review && snapshot.checks?.requirement !== 'none' && verdictOfChecks === 'failed') {
         // The reviewers approved, the author answered the failed check with the
         // same bytes, and the recorded result fails it again: further rounds
         // could only replay that result. Stop here; refresh-checks reruns the
@@ -1562,7 +1572,7 @@ export class Engine {
     // checkResults holds only the current revision's evidence; the history is
     // what replay needs to know that an earlier round's revision failed.
     this.run.checkHistory ??= []
-    this.run.checkHistory.push({ revision: current, ...tierOf, result: result.result, gating: gatingResult(result, this.run), at: this.clock.iso(), step: step?.number ?? null, afterApproval,
+    this.run.checkHistory.push({ revision: current, ...tierOf, result: result.result, gating: gatingResult(result, this.run), ...(inconclusiveBase(result, this.run) ? { inconclusive: true } : {}), at: this.clock.iso(), step: step?.number ?? null, afterApproval,
       // Each check run's own interval (the retried attempts too), so check time
       // stays measurable after a later revision drops this from checkResults.
       runs: [...(result.attempts ?? []), result].map((c) => ({ at: c.at, durationMs: c.durationMs })) })
@@ -1594,7 +1604,7 @@ export class Engine {
     const targetKey = crypto.createHash('sha256').update(JSON.stringify(target)).digest('hex')
     const sourceRevision = baseCommit
     this.run.baselineChecks ??= []
-    const held = this.run.baselineChecks.filter((b) => b.targetKey === targetKey && b.baseCommit === sourceRevision && b.result !== 'unavailable')
+    const held = this.run.baselineChecks.filter((b) => b.targetKey === targetKey && b.baseCommit === sourceRevision && b.result !== 'unavailable' && !b.unfinished)
     // A reconciled candidate's base (B′) keeps its own directory beside the run's.
     const dirName = `base-${targetKey.slice(0, 12)}${baseCommit === this.run.workspace.baseCommit ? '' : `-${baseCommit.slice(0, 12)}`}`
     // Across runs: the same drive of the same base commit, staging snapshot
@@ -1639,11 +1649,29 @@ export class Engine {
     const needsBase = result.result === 'failed' ||
       (await compareSelftestReports({ runDir: common.runDir, target, base: null, candidate: result, sourceRevision }))?.verdict === 'not-made'
     if (!base && needsBase && !this.controller.signal.aborted) base = await runBase()
+    // A base whose selftest run did not finish cannot tell new failures from
+    // inherited ones, and kept or cached it would mislead every later check of
+    // this commit. When it is what leaves this candidate's comparison
+    // inconclusive, one fresh drive, past the cache, replaces it; a candidate
+    // with nothing to judge does not pay ~15 minutes for it. Still unfinished,
+    // it is compared (not-made, baseUnfinished: the loop stops as
+    // checks-inconclusive, no author round) but never kept or cached.
+    const unfinished = async (b) => b && b.result !== 'unavailable' ? (await unfinishedSuites({ runDir: common.runDir, target, check: b })).length > 0 : false
+    const inconclusiveThrough = async (b) => b && b.result !== 'unavailable' && (await compareSelftestReports({ runDir: common.runDir, target, base: { ...b, sourceRevision }, candidate: result, sourceRevision }))?.baseUnfinished === true
+    if (await inconclusiveThrough(base) && !this.controller.signal.aborted) {
+      // A cached one was stored before unfinished bases were refused: drop it, or every later run hits it again.
+      if (base.reused) await cache?.discard()
+      // Recorded as evidence of the redrive, never offered for reuse (`held` skips it).
+      if (base !== known) this.run.baselineChecks.push({ ...base, targetKey, sourceRevision, capturedAt: base.at, unfinished: true })
+      base = await runChecks({ ...common, revision: null, base: true, dirName: await freshDir(dirName) })
+    }
+    const incomplete = await unfinished(base)
     // A base that could not be checked is not kept: the next check tries again.
     if (base && base !== known && base.result !== 'unavailable') {
       if (!base.reused) {
         Object.assign(base, { targetKey, sourceRevision, capturedAt: base.at, failures: await failureFingerprints({ runDir: common.runDir, check: base, target }) })
-        if (cache && !this.controller.signal.aborted) await cache.store({ ...base })
+        if (incomplete) base.unfinished = true
+        else if (cache && !this.controller.signal.aborted) await cache.store({ ...base })
       }
       // The identity it stands for, only when that is established: a hit, or a
       // drive whose identity read the same before and after. An unstable or
@@ -2674,7 +2702,7 @@ export class Engine {
    */
   checkEvidence () {
     return [...(this.run.checkHistory ?? []).map((h) => ({ ...h, result: h.gating ?? h.result })),
-      ...this.run.checkResults.map((c) => ({ revision: c.revision, ...(c.tier ? { tier: c.tier } : {}), result: gatingResult(c, this.run) }))]
+      ...this.run.checkResults.map((c) => ({ revision: c.revision, ...(c.tier ? { tier: c.tier } : {}), result: gatingResult(c, this.run), ...(inconclusiveBase(c, this.run) ? { inconclusive: true } : {}) }))]
   }
 
   /** Checks beside reviews unless the strategy keeps them first (`checks.concurrent: false`). */
@@ -3247,7 +3275,8 @@ export class Engine {
       entry.checks = check ? { result: check.result, gating, dir: check.dir, error: check.error ?? null }
         : { result: 'not-run', gating, reason: target ? 'the staging drive runs on a reconciled candidate only when checks are required' : 'no check target' }
       const satisfied = requirement === 'none' ? true : requirement === 'optional' ? gating !== 'failed' : gating === 'passed'
-      if (!satisfied) return await refuse('revalidation-failed', `the checks on the merged candidate did not pass (${check?.result ?? 'not run'})`)
+      // The raw result alone misleads: a drive can pass while a selftest new against the baseline still gates it.
+      if (!satisfied) return await refuse('revalidation-failed', `the checks on the merged candidate did not pass the gate (gating ${gating}; drive result ${check?.result ?? 'not run'})`)
 
       // Accepted: the merged candidate is the run's revision, with the approvals carried.
       const original = this.run.approvals.filter((a) => a.revision === approved.revision && !a.reconciledFrom)
