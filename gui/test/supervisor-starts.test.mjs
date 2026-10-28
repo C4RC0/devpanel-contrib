@@ -270,6 +270,22 @@ export default async function (t) {
       await gate.start(preview('a'))
       t.eq('repairing the checkout permits a launch', launched.length, 1)
     }
+
+    t.section('an ending the settle timer reads first still wakes the monitoring poll')
+    {
+      const state = fresh()
+      let status = 'preflighting'
+      const gate = createStartGate({ getState: () => state, save: async () => {}, tools: {
+        getRun: async () => ({ status, blockedReason: status === 'failed' ? 'preflight-refused' : null }),
+        start: async () => ({ runId: 'r', status })
+      } })
+      await gate.start(preview('a'))
+      status = 'failed'
+      await gate.refresh()
+      const owned = state.ownedRuns[0]
+      t.eq('refresh records the ending on the launch and the owned run', [state.launches[0].status, owned.status], ['finished', 'failed'])
+      t.eq('but the poll baseline still holds what monitoring last saw, so the poll reports the change', owned.observedStatus, 'preflighting')
+    }
   } finally {
     for (const s of services) await s.shutdown()
     await fs.rm(root, { recursive: true, force: true })
