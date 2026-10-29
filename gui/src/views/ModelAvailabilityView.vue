@@ -229,7 +229,9 @@ onUnmounted(() => { clearInterval(poll); clearInterval(tick) })
           </td>
           <td class="models__reason">
             <template v-if="m.record">
-              <div>{{ m.record.reason }}</div>
+              <!-- An expired record is kept as evidence of the last exhaustion; shown at full weight it reads as a current refusal. -->
+              <div v-if="!m.record.active" class="models__muted">Last exhaustion, expired; nothing is refused:</div>
+              <div :class="{ models__muted: !m.record.active }">{{ m.record.reason }}</div>
               <div class="models__muted">
                 <span v-if="m.record.runId">run {{ m.record.runId }}<span v-if="m.record.role"> · {{ m.record.role }}</span></span>
                 <span v-else-if="m.record.actor">hold by {{ m.record.actor }}</span>
@@ -311,7 +313,8 @@ onUnmounted(() => { clearInterval(poll); clearInterval(tick) })
           </td>
           <td class="models__reason">
             <template v-if="p.record">
-              <div>{{ p.record.reason }}</div>
+              <div v-if="!p.record.active" class="models__muted">Last hold, expired; nothing is held:</div>
+              <div :class="{ models__muted: !p.record.active }">{{ p.record.reason }}</div>
               <div v-if="p.record.actor" class="models__muted">hold by {{ p.record.actor }}</div>
             </template>
             <span v-else class="models__muted">no record</span>
