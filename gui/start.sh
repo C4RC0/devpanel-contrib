@@ -11,7 +11,7 @@
 #   DEVPANEL_DEV_PORT Vite dev server port, dev only    (default 5173)
 #   DEVPANEL_TICK_MS  metrics broadcast interval in ms  (default 2000)
 #   DEVPANEL_TLS      set to 0 to serve plain HTTP      (default on)
-#   DEVPANEL_CERT_DIR where localhost.crt/.key live     (default ../cert)
+#   DEVPANEL_CERT_DIR where localhost.crt/.key live     (default <dataRoot>/cert, else ../cert)
 #
 # Runs entirely as the invoking user (the project owner) — never as root. Port 443 works
 # unprivileged because /usr/bin/node-22 carries cap_net_bind_service.
@@ -57,7 +57,7 @@ SCHEME=https
 if [[ "${DEVPANEL_TLS:-1}" == "0" ]]; then
   SCHEME=http
 else
-  CERT_DIR="${DEVPANEL_CERT_DIR:-$(cd "$HERE/.." && pwd)/cert}"
+  CERT_DIR="${DEVPANEL_CERT_DIR:-$(node "$HERE/tools/data-path.mjs" cert)}"
   if [[ ! -f "$CERT_DIR/localhost.crt" || ! -f "$CERT_DIR/localhost.key" ]]; then
     say "no certificate yet — generating one"
     ./make-cert.sh

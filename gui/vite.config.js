@@ -6,11 +6,12 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vuetify from 'vite-plugin-vuetify'
 
-const HERE = fileURLToPath(new URL('.', import.meta.url))
+import { certDir } from './server/project-path.mjs'
+
 
 // The dev server serves over the same certificate as production, so the dev and
 // production origins behave identically (secure context, wss:// sockets).
-const CERT_DIR = process.env.DEVPANEL_CERT_DIR ?? path.join(path.dirname(HERE), 'cert')
+const CERT_DIR = certDir()
 const TLS_CERT = process.env.DEVPANEL_TLS_CERT ?? path.join(CERT_DIR, 'localhost.crt')
 const TLS_KEY = process.env.DEVPANEL_TLS_KEY ?? path.join(CERT_DIR, 'localhost.key')
 const TLS_ON = process.env.DEVPANEL_TLS !== '0' && fs.existsSync(TLS_CERT) && fs.existsSync(TLS_KEY)

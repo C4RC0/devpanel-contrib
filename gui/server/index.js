@@ -16,7 +16,7 @@ import {
   addStepFile, createIssue, createStep, getIssue, IssueError,
   listIssues, listProjects, MAX_FILE_BYTES, readStepFile
 } from './issues.js'
-import { projectPath } from './project-path.mjs'
+import { certDir, logDir, projectPath } from './project-path.mjs'
 import { loadToken, requireToken, socketAuth, tokenFile } from './auth.mjs'
 import { localLogin, localLoginMiddleware } from './local-login.mjs'
 import { getRun, listPlaybooks, listRuns, preview, readLiveOutput, readStepResponse } from './runs-api.mjs'
@@ -52,7 +52,7 @@ const ROOT = path.resolve(HERE, '..')
 // scratch directory for the browser suite, so dist/ never enters a candidate).
 const DIST = process.env.DEVPANEL_DIST_DIR ?? path.join(ROOT, 'dist')
 const logger = installLogging({
-  dir: process.env.DEVPANEL_LOG_DIR ?? path.join(ROOT, '..', 'logs'),
+  dir: logDir(),
   maxBytes: Number(process.env.DEVPANEL_LOG_MAX_BYTES ?? 10 * 1024 * 1024),
   backups: Number(process.env.DEVPANEL_LOG_BACKUPS ?? 5)
 })
@@ -74,7 +74,7 @@ const TICK_MS = Number(process.env.DEVPANEL_TICK_MS ?? 2000)
 
 // TLS from <project>/cert/localhost.{crt,key} (make-cert.sh writes them).
 // Set DEVPANEL_TLS=0 to serve plain HTTP instead.
-const CERT_DIR = process.env.DEVPANEL_CERT_DIR ?? path.join(path.dirname(ROOT), 'cert')
+const CERT_DIR = certDir()
 const TLS_CERT = process.env.DEVPANEL_TLS_CERT ?? path.join(CERT_DIR, 'localhost.crt')
 const TLS_KEY = process.env.DEVPANEL_TLS_KEY ?? path.join(CERT_DIR, 'localhost.key')
 const TLS_ENABLED = process.env.DEVPANEL_TLS !== '0'
