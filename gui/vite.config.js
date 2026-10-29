@@ -22,7 +22,7 @@ const devHttps = TLS_ON ? { cert: fs.readFileSync(TLS_CERT), key: fs.readFileSyn
 // does not silently break the dev proxy.
 const API_PORT = process.env.PORT ?? '443'
 // A server bound to 0.0.0.0 is still reached over loopback from here.
-const API_HOST = (process.env.HOST ?? '127.0.0.1').replace(/^(0\.0\.0\.0|::)$/, '127.0.0.1')
+const API_HOST = (process.env.HOST ?? '127.0.0.1').split(',')[0].trim().replace(/^(0\.0\.0\.0|::)$/, '127.0.0.1')
 const API_TARGET = process.env.DEVPANEL_API ?? `${TLS_ON ? 'https' : 'http'}://${API_HOST}:${API_PORT}`
 
 export default defineConfig({
