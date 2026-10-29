@@ -5,6 +5,8 @@ Some configuration belongs to one installation, not to devpanel:
 - the projects it serves (`projects/<id>.yaml`): their containers, SSH targets and paths;
 - its own versions of catalogue playbooks (`playbooks/<id>.yaml`): other seats, models,
   efforts or budgets, while the tracked `playbooks/` stays the shared default;
+- which decision provider is active and how it is reached (`decisions/active.yaml`,
+  `decisions/<id>.yaml`), read before the tracked `decisions/` (docs/decisions.md);
 - roster entries that name a person's login (`account:`), or carry the installation's own
   dated verification evidence; the tracked `roster/` is the shared model catalogue;
 - release targets (`tools/releases/<site>-targets.json`): hosts, instance directories, state roots, service accounts;
@@ -38,6 +40,8 @@ host-config/
   projects/<id>.yaml
   roster/<id>.yaml
   playbooks/<id>.yaml
+  decisions/active.yaml
+  decisions/<id>.yaml
   releases/<site>-targets.json
   releases/README.md
   live-reports/<report>
