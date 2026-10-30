@@ -7,6 +7,7 @@
 // same playbook after an owner answer.
 import fs from 'node:fs';
 import https from 'node:https';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +65,9 @@ const USAGE = `usage: devpanel.mjs [-p <project>] <command> ...
   answer <id> <file.json|->   answer triage questions; RESTARTS the run (paid)
   preview <id> <playbook>     what a start would run: checks, rounds, budgets, prerequisites (free)
   start <id> <playbook>       preview, then start that exact configuration (paid; only on the user's word)
+  watch [<id>] [--until-settled]
+                              one line per run event of the project (or issue) as it happens; with
+                              --until-settled, exit when the issue's run finishes, pauses or stops
 <id> may be a unique prefix or slug fragment. Project defaults to the one the cwd is in (projectDiscovery, else the nearest *-project directory).`;
 
 function fail(message) {
@@ -252,7 +256,42 @@ const commands = {
         const r = await api('POST', `${base(project)}/issues/${id}/runs/${run.runId}/owner-input`, body);
         console.log(JSON.stringify(r, null, 2));
     },
+
+    // The panel's own socket, so a caller (a person's terminal, an orchestrating session) learns of a run's progress
+    // when it happens instead of polling. Output chunks and activity ticks are left out: they are on disk.
+    async watch(project, ...flags) {
+        const untilSettled = flags.includes('--until-settled');
+        const wanted = flags.find((f) => !f.startsWith('--'));
+        const id = wanted ? await resolveId(project, wanted) : null;
+        if (untilSettled && !id) fail('--until-settled needs the issue whose run to wait for');
+        const settledRun = async () => {
+            const run = (await api('GET', `${base(project)}/issues/${id}`)).latestRun;
+            return run && (!run.live || run.status === 'paused') ? run : null;
+        };
+        if (untilSettled) {
+            const run = await settledRun();
+            if (run) { console.log(`settled ${run.runId} ${run.status}${run.result ? ` / ${run.result}` : ''}`); return; }
+        }
+        const { io } = createRequire(path.join(ROOT, 'gui', 'package.json'))('socket.io-client');
+        const socket = io(SERVER.origin, { auth: { token: token() }, rejectUnauthorized: false, transports: ['websocket'] });
+        const time = () => new Date().toTimeString().slice(0, 8);
+        socket.on('connect', () => console.log(`${time()} watching ${project}${id ? `/${id}` : ''}`));
+        socket.on('connect_error', (e) => console.log(`${time()} cannot connect: ${e.data?.reason ?? e.message}`));
+        socket.on('disconnect', (reason) => console.log(`${time()} disconnected: ${reason}`));
+        socket.on('run:event', async (e) => {
+            if (e.type === 'live' || e.type === 'activity' || e.project !== project || (id && e.issueId !== id)) return;
+            const detail = [e.role, e.stepId, e.status ?? e.outcome ?? e.reason].filter(Boolean).join(' ');
+            console.log(`${time()} ${id ? '' : `${e.issueId} `}${e.runId ?? ''} ${e.type}${detail ? ` ${detail}` : ''}`);
+            // The run record, not the event, says whether it settled: a pause or an end is persisted before it is emitted.
+            if (untilSettled && SETTLING.has(e.type)) {
+                const run = await settledRun().catch(() => null);
+                if (run) { console.log(`settled ${run.runId} ${run.status}${run.result ? ` / ${run.result}` : ''}`); socket.close(); }
+            }
+        });
+    },
 };
+
+const SETTLING = new Set(['finished', 'paused', 'cancelled', 'run-recovery-required', 'run-finished', 'run-abandoned']);
 
 async function previewOf(project, wanted, playbook) {
     if (!playbook) fail('name the playbook, e.g. implementation, plan-and-implement, analysis, staging');

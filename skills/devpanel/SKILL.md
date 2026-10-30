@@ -18,6 +18,7 @@ devpanel.mjs note <id> note.md        # context the next run will read
 devpanel.mjs answer <id> answer.json  # RESTARTS the run — see below
 devpanel.mjs preview <id> <playbook>  # what a start would run (free)
 devpanel.mjs start <id> <playbook>    # paid; only when the user asks — see below
+devpanel.mjs watch [<id>] [--until-settled]  # run events as they happen; exits when the run settles
 ```
 
 ## Writing the issue
@@ -65,6 +66,8 @@ devpanel.mjs start <id> <playbook>     # previews again, refuses a blocking prer
 Playbooks: `analysis`, `triage`, `implementation`, `plan-and-implement`, `staging`, `deployment`. Pick the one that fits and say which. Relay the preview's checks and budget lines with the run id. A production `deployment` still needs the operator's explicit instruction (general §010).
 
 ## Following up
+
+`watch <id> --until-settled` prints one line per run event over the panel's socket and exits when the issue's run finishes, pauses or stops (immediately if it already has), so a long run can be waited for without polling; without an id it follows every run of the project.
 
 `status` shows the latest run's own explanation (`headline`, `detail`, `unmet` goals, `next`). Relay it, don't re-judge it: an unmet goal is the coordinator's evidence, quoted. `result` prints `result.md`; a delivered patch has already been applied to the development checkout, uncommitted (general §007), so `git diff` in that project shows it. Committing is the operator's checkpoint (general §009).
 
