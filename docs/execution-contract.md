@@ -577,9 +577,12 @@ and line positions are never compared.
   or the base's, cannot be read, or there is no base of this source revision,
   or the base's report holds a suite-level failure (a name ending in a
   parenthesised segment: `worker/(suite)`, `(suite-busy)`,
-  `admin/(thread-ready)`) while a candidate failure is absent from it. Such a
-  base never finished its suites, so it cannot call a failure new: it is not
-  evidence of a regression.
+  `admin/(thread-ready)`) while a candidate failure is absent from it, or the
+  base's report command failed or never ran (the base stopped before its
+  selftests, e.g. at readiness). Such a base never finished its suites, so it
+  cannot call a failure new: it is not evidence of a regression, and both mark
+  the comparison `baseUnfinished`. A report that was produced but cannot be
+  read does not: a fresh drive would read it the same way.
 - `not-applicable`: the command itself failed, so the byte rules judge it.
 
 **An unfinished base is driven again.** When an unfinished base is what makes

@@ -326,7 +326,7 @@ export function failedSelftests (report) {
 
 async function readReport (runDir, check, id) {
   const c = (check?.commands ?? []).find((x) => x.id === id)
-  if (!c) return { error: 'did not run' }
+  if (!c) return { error: 'did not run', notRun: true }
   if (!c.passed) return { failed: true }
   const stdout = await fs.readFile(path.join(runDir, check.dir ?? '', `${id}.stdout`), 'utf8').catch(() => null)
   return stdout === null ? { error: 'its output could not be read' } : selftestReport(stdout)
@@ -343,7 +343,8 @@ export async function unfinishedSuites ({ runDir, target, check }) {
   const found = []
   for (const { id } of declared) {
     const r = await readReport(runDir, check, id)
-    if (r.report) found.push(...failedSelftests(r.report).filter(isSuiteLevel))
+    if (r.failed || r.notRun) found.push(`${id}/(report)`)
+    else if (r.report) found.push(...failedSelftests(r.report).filter(isSuiteLevel))
   }
   return found
 }
@@ -374,7 +375,11 @@ export async function compareSelftestReports ({ runDir, target, base, candidate,
     if (!base || base.result === 'unavailable') { notMade.push(`${id}: no baseline of this source revision could be captured`); continue }
     if ((base.sourceRevision ?? base.baseCommit) !== sourceRevision) { notMade.push(`${id}: the baseline is not of ${sourceRevision}`); continue }
     const b = await read(base, id)
-    if (b.failed || b.error) { notMade.push(`${id}: on the base, ${b.error ?? 'the command failed'}`); continue }
+    // A base whose report command failed or never ran stopped before its selftests (a readiness race on
+    // 2026-11-01): like a suite that did not finish, a fresh base answers it, not the author. A report
+    // that was produced but cannot be read is another matter, and stays a plain not-made.
+    if (b.failed || b.notRun) { notMade.push(`${id}: on the base, ${b.error ?? 'the command failed'}, so its selftest run did not complete`); unfinishedBase++; continue }
+    if (b.error) { notMade.push(`${id}: on the base, ${b.error}`); continue }
     const known = new Set(failedSelftests(b.report))
     const fresh = failed.filter((test) => !known.has(test))
     // A suite-level entry on the base ("worker/(suite)" after an RPC timeout, "(suite-busy)", "admin/(thread-ready)")

@@ -10,7 +10,7 @@ import { explainRun } from '../server/runtime/run-explanation.mjs'
 import { renderResult } from '../server/run-result-step.mjs'
 import { infrastructureErrors } from '../server/infrastructure.mjs'
 import { readEvents } from '../server/runtime/store.mjs'
-import { outputParts, compareFailures, failureFingerprints, gatingResult, inconclusiveBase, selftestReport, failedSelftests, compareSelftestReports, isSelftestReport } from '../server/runtime/baseline-failures.mjs'
+import { outputParts, compareFailures, failureFingerprints, gatingResult, inconclusiveBase, selftestReport, failedSelftests, compareSelftestReports, isSelftestReport, unfinishedSuites } from '../server/runtime/baseline-failures.mjs'
 
 export const name = 'inherited check failures — baseline-known failures do not block, new ones do'
 
@@ -337,6 +337,12 @@ export default async function (t) {
     t.ok('and the reason names the unfinished suite', /did not complete \(worker\/\(suite\), \(suite-busy\)\)/.test(incomplete.reason), incomplete.reason)
     t.eq('it is marked as caused by the base alone', incomplete.baseUnfinished, true)
     t.eq('an unreadable base is not-made without that mark', (await compareReports('garbage', collected('r2', report([OLD])))).baseUnfinished, undefined)
+    const stopped = await compareReports('', collected('r2', report([OLD])), { basePassed: false })
+    t.eq('a base whose report command failed (stopped before its selftests) is unfinished too', [stopped.verdict, stopped.baseUnfinished], ['not-made', true])
+    t.ok('saying its selftest run did not complete', /on the base, the command failed, so its selftest run did not complete/.test(stopped.reason), stopped.reason)
+    const stoppedBase = { result: 'failed', dir: 'checks/base', commands: [{ id: 'collect', passed: false, exitCode: 1 }] }
+    t.eq('and unfinishedSuites names it, so the engine neither keeps nor caches that base', await unfinishedSuites({ runDir: os.tmpdir(), target: { finallyCommands: [{ id: 'collect', report: 'selftest' }] }, check: stoppedBase }), ['collect/(report)'])
+    t.eq('a base that never ran the command is unfinished as well', await unfinishedSuites({ runDir: os.tmpdir(), target: { finallyCommands: [{ id: 'collect', report: 'selftest' }] }, check: { result: 'failed', commands: [] } }), ['collect/(report)'])
     const passedWith = (selftest, extra = {}) => ({ result: 'passed', baselineComparison: { selftest }, ...extra })
     t.eq('inconclusiveBase: a passed drive whose only fault is the unfinished base', inconclusiveBase(passedWith(incomplete)), true)
     t.eq('but the gate still fails it', gatingResult(passedWith(incomplete)), 'failed')
