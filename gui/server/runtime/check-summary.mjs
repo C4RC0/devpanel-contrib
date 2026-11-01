@@ -26,7 +26,9 @@ export function checkSummary (check, fullEvidence = null) {
     // Earlier attempts on the same revision (the engine's retry of a failure).
     // `flaky` means this pass followed a failure of identical bytes.
     ...(check.attempts?.length ? { attempts: check.attempts, flaky: check.flaky === true,
-      retryNote: check.flaky ? 'An earlier attempt on this same revision failed and the retry passed: the failure is not reproducible, but the instability is real; name it as a residual risk if the failing commands touch what this change does.'
+      retryNote: check.selftestReproduced ? 'The new selftest failures were named again by a second drive of this same revision: they reproduce. Each attempt\'s newFailures lists them.'
+        : check.flaky && check.attempts.some(a => a.newFailures?.length) ? 'A second drive of this same revision no longer names the new selftest failures the first one did (attempts[].newFailures): they are unstable, not reproduced; name them as a residual risk if they touch what this change does.'
+        : check.flaky ? 'An earlier attempt on this same revision failed and the retry passed: the failure is not reproducible, but the instability is real; name it as a residual risk if the failing commands touch what this change does.'
         : check.attempts.some(a => a.result !== 'failed') ? 'The failure stands: a retry on this same revision could not run (see its error), so it neither confirms nor clears the failure.'
           : 'Every attempt on this same revision failed: the failure reproduces.' } : {}),
     instruction: 'Summary only. Full evidence includes the file manifest and command details; inspect it when needed. A passed smoke test is not proof of all acceptance criteria. A command\'s `results` lists every PASS/FAIL-style line of its whole output, including non-gating collectors: quote those lines as evidence instead of saying the report is unreadable.'

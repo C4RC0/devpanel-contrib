@@ -268,6 +268,15 @@ recorded and the failure stands. Each attempt keeps its command records, so
 cannot rerun a check, and no operator answer can let it: the rerun is the
 engine's.
 
+A drive that **passed** but whose selftest report names failures the base does
+not have (`baselineComparison.selftest.verdict: new-failures`) fails the gate
+too, and runs once more on the same revision under the same allowance
+(`runtime/selftest-retry.mjs`; the event carries `reason: new-selftest-failures`).
+A second drive that names none of those tests again replaces the first, marked
+`flaky`, with the first kept in `attempts` beside the `newFailures` it named;
+one that names any of them again leaves the first standing with
+`selftestReproduced: true`. Either way only then does the author get a round.
+
 When every reviewer approved a revision, its check failed, and the author's
 next answer is the **same revision**, the loop stops as
 `checks-failed-unchanged` instead of replaying the recorded failure until its

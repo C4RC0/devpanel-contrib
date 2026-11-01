@@ -1,6 +1,7 @@
 import { checksOnlyBlock, continueUnavailable, resumeUnavailable } from './run-control.mjs'
 import { describeCommand } from './command-line.mjs'
 import { checkSummary } from './check-summary.mjs'
+import { retryNewSelftestFailures } from './selftest-retry.mjs'
 import { writeJson } from './persistence.mjs'
 import fs from 'node:fs/promises'
 import { executeRelease, recoverRelease } from './release.mjs'
@@ -41,6 +42,11 @@ export function harnessUnavailable (harnesses, id) {
   const failure = harnesses?.[HARNESS_LOAD_FAILURES]?.[id]
   return failure ? `harness "${id}" failed to load: ${failure.message} (an adapter changed on disk after the service started needs a restart: systemctl restart devpanel)` : null
 }
+
+/** One check attempt as kept on the check that replaced or outlived it (check-log.mjs reads its logs). */
+const attemptRecord = (c) => ({ dir: c.dir, result: c.result, at: c.at, durationMs: c.durationMs, error: c.error ?? null,
+  failed: (c.commands ?? []).filter((x) => x.passed === false && x.required !== false).map((x) => x.id),
+  commands: (c.commands ?? []).map((x) => ({ id: x.id, required: x.required, passed: x.passed, exitCode: x.exitCode, log: x.log })) })
 
 export const FINALIZABLE_BLOCKS = ['delivery-unverifiable', 'delivery-failed', 'delivery-unavailable', 'candidate-changed-during-delivery', 'source-delivery-blocked', 'source-delivery-interrupted']
 import { candidateDiff } from './diff.mjs'
@@ -1692,7 +1698,13 @@ export class Engine {
     if (selftest) result.baselineComparison = { ...(result.baselineComparison ?? {}), selftest }
     // A base from another run of the same key says so to every reader.
     if (base?.reused && result.baselineComparison) result.baselineComparison.reused = base.reused
-    return result
+    return retryNewSelftestFailures({ result, limit: Number.isInteger(target.retryFailed) ? target.retryFailed : 1, aborted: () => this.controller.signal.aborted,
+      rerun: () => runChecks({ ...common, revision: current, fingerprint: fp }), record: attemptRecord, persist: (event) => this.persist(event),
+      compare: async (retry) => {
+        const comparison = base && base.result !== 'unavailable' ? await compareWithBaseline({ runDir: common.runDir, baseline: base, candidate: retry }) : { ...(result.baselineComparison ?? {}) }
+        const again = await compareSelftestReports({ runDir: common.runDir, target, base, candidate: retry, sourceRevision })
+        return { ...comparison, ...(again ? { selftest: again } : {}), ...(base?.reused ? { reused: base.reused } : {}) }
+      } })
   }
 
   /**
@@ -1708,9 +1720,7 @@ export class Engine {
   async retryFailedCheck (first, { common, revision, fingerprint: fp, target }) {
     const attempts = []
     const limit = Number.isInteger(target.retryFailed) ? target.retryFailed : 1
-    const record = (c) => ({ dir: c.dir, result: c.result, at: c.at, durationMs: c.durationMs, error: c.error ?? null,
-      failed: (c.commands ?? []).filter((x) => x.passed === false && x.required !== false).map((x) => x.id),
-      commands: (c.commands ?? []).map((x) => ({ id: x.id, required: x.required, passed: x.passed, exitCode: x.exitCode, log: x.log })) })
+    const record = attemptRecord
     let latest = first
     while (latest.result === 'failed' && attempts.length < limit && !this.controller.signal.aborted) {
       await this.persist({ type: 'checks-retry', revision, attempt: attempts.length + 2, failedDir: latest.dir })

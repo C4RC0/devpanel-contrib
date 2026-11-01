@@ -9,6 +9,7 @@ import { supportedActions } from '../server/supervisor.mjs'
 import { explainRun } from '../server/runtime/run-explanation.mjs'
 import { renderResult } from '../server/run-result-step.mjs'
 import { infrastructureErrors } from '../server/infrastructure.mjs'
+import { readEvents } from '../server/runtime/store.mjs'
 import { outputParts, compareFailures, failureFingerprints, gatingResult, inconclusiveBase, selftestReport, failedSelftests, compareSelftestReports, isSelftestReport } from '../server/runtime/baseline-failures.mjs'
 
 export const name = 'inherited check failures — baseline-known failures do not block, new ones do'
@@ -361,7 +362,7 @@ export default async function (t) {
 
   t.section('a new selftest failure fails a passing check: the author gets a round, fixes it, and the run closes')
   {
-    // retryFailed 1: a selftest-gated check is not a failed one, so it is not retried.
+    // retryFailed 1: the selftest-gated drive runs once more first (selftest-retry.mjs); the regression reproduces.
     const { engine, prompts, implementTurns } = await scenario([{ id: 'collect', run: COLLECT, report: 'selftest' }], { regression: true, retryFailed: 1 })
     const run = engine.run
     t.eq('the run completes', `${run.status} ${run.outcome}`, 'completed resolved', `${run.blockedReason} ${JSON.stringify(run.closure?.conditions)}`)
@@ -370,8 +371,25 @@ export default async function (t) {
     const implement1 = prompts.find((p) => p.stepId === 'implement' && p.round === 1)
     t.ok('the author was told which test is new', /"newFailures": \[\s*\{\s*"command": "collect",\s*"test": "socket — new-test"/.test(implement1?.prompt ?? ''))
     t.eq('the base was captured for the passing check', run.baselineChecks?.length, 1)
-    t.ok('and nothing was retried', run.checkResults.every((c) => !c.attempts))
+    const retries = (await readEvents(engine.issuePath, engine.runId)).events.filter((e) => e.type === 'checks-retry')
+    t.eq('the gated drive ran once more before the author was sent back, and only that one', retries.map((e) => e.reason), ['new-selftest-failures'])
+    t.ok('the author was told the failure reproduced', /they reproduce/.test(implement1?.prompt ?? ''))
     t.eq('closure records the inherited failure, which did not block', [run.closure?.checks?.selftest?.verdict, run.closure?.checks?.selftest?.baselineKnown?.map((x) => x.test)], ['baseline-known', ['socket — old-test']])
+    await releaseWorkspace(engine)
+  }
+
+  t.section('a new selftest failure that a second drive does not repeat costs no author round')
+  {
+    // The candidate (work.txt) names the regression on its first drive only: a counter outside the rebuilt candidate.
+    const seen = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'devpanel-unstable-')), 'seen')
+    temps.push(path.dirname(seen))
+    const unstable = COLLECT.replace('if test -f break.txt; then', `if test -f work.txt && ! test -f ${seen}; then touch ${seen}; `)
+    const { engine, implementTurns } = await scenario([{ id: 'collect', run: unstable, report: 'selftest' }], { retryFailed: 1 })
+    const run = engine.run
+    t.eq('the run completes', `${run.status} ${run.outcome}`, 'completed resolved', `${run.blockedReason} ${JSON.stringify(run.closure?.conditions)}`)
+    t.eq('without another author round', implementTurns, 1)
+    const check = run.checkResults.at(-1)
+    t.eq('the second drive stands, marked flaky, the first kept with what it named', [check.flaky, check.attempts?.[0]?.newFailures?.map((x) => x.test)], [true, ['socket — new-test']])
     await releaseWorkspace(engine)
   }
 
