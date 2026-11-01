@@ -10,7 +10,8 @@ import { baselineOf, fingerprint } from '../server/runtime/fingerprint.mjs'
 import { resolvePlaybook } from '../server/config/load.mjs'
 import { readEvents } from '../server/runtime/store.mjs'
 import { undeliveredApproval } from '../server/runtime/carry-forward.mjs'
-import { supportedActions } from '../server/supervisor.mjs'
+import { supportedActions, createSupervisor } from '../server/supervisor.mjs'
+import { autoReconcileRefusal } from '../server/runtime/auto-reconcile.mjs'
 import { engineFixture, scriptFor, cleanupFixtures } from './fakes/fixture.mjs'
 
 const exec = promisify(execFile)
@@ -108,6 +109,8 @@ export default async function (t) {
     {
       const scenario = { worktree: { 'server.mjs': lines(10, { 9: 'line 9 fixed' }), 'changelog.txt': 'candidate: fixed line 9\nv1 released\n' }, source: { 'changelog.txt': 'other: landed first\nv1 released\n' } }
       const { f, engine } = await blockedRun(scenario)
+      t.eq('changelog-only drift on a declared path is reconciled without being asked', autoReconcileRefusal(engine.run, { '**/changelog.txt': 'prepend' }), null)
+      t.ok('but not when the project declares nothing', /does not declare.*changelog\.txt/.test(autoReconcileRefusal(engine.run, {})))
       await engine.reconcileDelivery({ policy: { '**/changelog.txt': 'prepend' } })
       t.eq('it delivers', `${engine.run.status} ${engine.run.outcome}`, 'completed resolved', `${engine.run.blockedReason} ${JSON.stringify(engine.run.reconciliations.at(-1))}`)
       t.eq("the candidate's entry is above the source's", await read(f, 'changelog.txt'), 'candidate: fixed line 9\nother: landed first\nv1 released\n')
@@ -115,11 +118,36 @@ export default async function (t) {
       await releaseOwnership(engine, { reason: 'test' }).catch(() => {})
     }
 
+    t.section('2c. the panel reconciles a changelog-only drift by itself when the run ends')
+    {
+      const scenario = { worktree: { 'server.mjs': lines(10, { 9: 'line 9 fixed' }), 'changelog.txt': 'candidate: fixed line 9\nv1 released\n' }, source: { 'changelog.txt': 'other: landed first\nv1 released\n' } }
+      const { f, engine } = await blockedRun(scenario)
+      await fs.mkdir(path.join(f.configRoot, 'projects'), { recursive: true })
+      await fs.writeFile(path.join(f.configRoot, 'projects', 'devpanel-project.yaml'), "id: devpanel-project\nworkspace:\n  reconcile:\n    '**/changelog.txt': prepend\n")
+      await releaseOwnership(engine, { reason: 'test' }).catch(() => {})
+      const projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'reconcile-projects-'))
+      temps.push(projectsDir)
+      await fs.symlink(f.projectPath, path.join(projectsDir, 'devpanel-project'))
+      const supervisor = createSupervisor({ issues: f.issues, harnessDir: path.join(f.configRoot, 'harness'), projectsDir, configRoot: f.configRoot })
+      // Finalize ends like any run (announceEnd): still blocked by the drift, which starts the automatic attempt.
+      await supervisor.finalize({ project: 'devpanel-project', issueId: f.issue.id, runId: engine.runId })
+      const runFile = path.join(f.issue.path, 'runs', engine.runId, 'run.json')
+      const until = Date.now() + 60000
+      let run
+      do { await new Promise((r) => setTimeout(r, 100)); run = JSON.parse(await fs.readFile(runFile, 'utf8')) } while ((!run.reconciliations?.some((r) => r.endedAt) || run.status === 'running') && Date.now() < until)
+      t.eq('it is delivered without anyone pressing Reconcile', `${run.status} ${run.outcome}`, 'completed resolved', JSON.stringify(run.reconciliations?.at(-1) ?? run.blockedReason))
+      t.eq('the attempt is the engine\'s', run.reconciliations?.[0]?.by, 'engine')
+      t.eq("the candidate's entry is above the source's", await read(f, 'changelog.txt'), 'candidate: fixed line 9\nother: landed first\nv1 released\n')
+      await supervisor.shutdown?.()
+    }
+
     t.section('3. conflicting code path: nothing is delivered, the carry-forward stays')
     {
       const { f, engine } = await blockedRun({ worktree: { 'server.mjs': lines(10, { 5: 'line 5 by the candidate' }) }, source: { 'server.mjs': lines(10, { 5: 'line 5 by someone else' }) } })
+      t.ok('drift on a code path is never reconciled automatically', /does not declare.*server\.mjs/.test(autoReconcileRefusal(engine.run, { '**/changelog.txt': 'append' })))
       await engine.reconcileDelivery({ policy: { '**/changelog.txt': 'append' } })
       t.eq('still blocked as before', `${engine.run.status} ${engine.run.blockedReason}`, 'blocked source-delivery-blocked')
+      t.ok('and one attempt is the only automatic one', /already attempted/.test(autoReconcileRefusal(engine.run, { '**': 'append' })))
       t.eq('the conflicting path is listed', [engine.run.reconciliations.at(-1).state, engine.run.reconciliations.at(-1).conflicts], ['conflicts', ['server.mjs']])
       t.eq('the source is untouched', await read(f, 'server.mjs'), lines(10, { 5: 'line 5 by someone else' }))
       t.ok('no revision or approval was added', !engine.run.revisions.some((r) => r.reconciledFrom) && !engine.run.approvals.some((a) => a.reconciledFrom))

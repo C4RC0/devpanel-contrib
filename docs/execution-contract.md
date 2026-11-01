@@ -849,7 +849,11 @@ every closure condition met but delivery — offers `reconcile-delivery`
 the top-level supervisor's `reconcile_delivery_run`). The name is deliberately
 not `reconcile`, which already means integration recovery and runtime session
 reconciliation. It takes Finalize's exclusivity and disposal rules, and
-`runtime/source-reconcile.mjs` does the work:
+`runtime/source-reconcile.mjs` does the work. When every drifted own path is one
+the project declares `append`/`prepend`, the panel runs it by itself as soon as
+the run ends (`runtime/auto-reconcile.mjs`, actor `engine`), once per run: a run
+that already has a reconciliation, a drift on any undeclared path, or a project
+that is busy at that moment leaves the run blocked with the button offered.
 
 1. The retained patch must still rebuild the approved revision on its base B.
    Paths under materialized links are merged like any other (B holds their

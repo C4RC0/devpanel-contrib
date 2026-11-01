@@ -22,6 +22,7 @@ import {
 } from './runtime/launch.mjs'
 import { FINALIZABLE_BLOCKS, HARNESS_LOAD_FAILURES, harnessUnavailable } from './runtime/engine.mjs'
 import { reconcileUnavailable } from './runtime/source-reconcile.mjs'
+import { autoReconcileRefusal } from './runtime/auto-reconcile.mjs'
 import { LockHeld, ownerLiveness, withLock } from './runtime/lock.mjs'
 import { hostPlatform } from './runtime/platform.mjs'
 import { terminatePids } from './runtime/process.mjs'
@@ -604,6 +605,26 @@ export function createSupervisor ({
    * (run-result-step.mjs), then say so. The account is for people; failing to
    * write it is logged and changes nothing about the run.
    */
+  /*
+   * A run blocked at delivery only by drift on paths the project declares
+   * reconcilable (its changelog) is reconciled at once (auto-reconcile.mjs), not
+   * left for a person. Not awaited: the run has ended and its account is
+   * written. A refusal from finalize (the project became busy, the record moved
+   * on) leaves the run blocked exactly as it was, with Reconcile still offered.
+   */
+  function autoReconcile (project, issueId, runId) {
+    ;(async () => {
+      const issue = await issues.getIssue(project, issueId)
+      if (issue.packed) return
+      const run = await store.readRun(issue.path, runId)
+      if (run.blockedReason !== 'source-delivery-blocked') return
+      const policy = (await loadConfig({ root: configRoot })).projects.get(project)?.workspace?.reconcile ?? {}
+      const refusal = autoReconcileRefusal(run, policy)
+      if (refusal) return
+      await finalize({ project, issueId, runId, reconcile: true, actor: 'engine' })
+    })().catch((error) => console.warn(`[devpanel] automatic reconcile of ${project}/${issueId} run ${runId} did not run: ${error.message}`))
+  }
+
   async function announceEnd (project, issueId, runId, type = 'run-finished') {
     let inquiry = false
     try {
@@ -614,6 +635,7 @@ export function createSupervisor ({
       console.warn(`[devpanel] could not write the result of ${project}/${issueId} run ${runId}: ${error.message}`)
     }
     emit?.({ type, project, issueId, runId })
+    if (type === 'run-finished') autoReconcile(project, issueId, runId)
     // An answered inquiry (row 4) packs itself once its run is settled; every
     // other ending waits for a close or an acknowledgement.
     if (inquiry) {
