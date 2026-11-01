@@ -1527,7 +1527,9 @@ export class Engine {
       // Working in place, the live checkout is the workspace: denying it would deny the work itself.
       allowLiveCheckout: Boolean(t.allowLiveCheckout) || this.run.workspace?.isolation === 'in-place',
       networkAccess: Boolean(this.snapshot.infrastructure),
-      allowedRoots: [...(t.allowedRoots ?? []), path.join(store.runDir(this.issuePath,this.runId), 'evidence'), ...(this.run.workspace?.scratchPath ? [this.snapshot.tactic && role ? path.join(this.run.workspace.scratchPath,role) : this.run.workspace.scratchPath] : [])],
+      // checks/ beside evidence/: the full per-command logs. Read-only like it; without them seats asked the
+      // operator whether a criterion could be accepted on the summary, because the names they needed were only there.
+      allowedRoots: [...(t.allowedRoots ?? []), path.join(store.runDir(this.issuePath,this.runId), 'evidence'), path.join(store.runDir(this.issuePath,this.runId), 'checks'), ...(this.run.workspace?.scratchPath ? [this.snapshot.tactic && role ? path.join(this.run.workspace.scratchPath,role) : this.run.workspace.scratchPath] : [])],
       liveCheckout: this.projectPath ?? null,
       liveCheckoutAliases: this.projectAlias ? [this.projectAlias] : [],
       worktree: this.run.workspace?.path ?? null,
@@ -1957,6 +1959,7 @@ export class Engine {
       const brief = toolingBrief({ tooling: this.snapshot.workspace?.tooling, worktree: this.run.workspace.path, shell: this.snapshot.participants[role]?.model.harness !== 'gemini', confinement: this.toolingConfinement() })
       if (brief) append('tooling-commands', brief)
       append('tooling', `Source workspace: ${this.run.workspace.path}. ${tooling.writesCode ? 'You may edit and stage source; do not change Git HEAD or create commits.' : 'Source and Git state are read-only for your role. Write temporary files and output only in the scratch directory.'}${tooling.allowedRoots.length ? ` You may also read ${tooling.allowedRoots.join(', ')}.` : ''} ${tooling.allowLiveCheckout ? 'You may read the project\'s live checkout.' : `Do not read or run anything from the project's live checkout${tooling.liveCheckout ? ` at ${tooling.liveCheckout}` : ''}: tooling loaded from there is code outside the candidate.`}`)
+      if (this.run.checkResults.length) append('check-logs', `The run's check logs are readable (read-only): ${path.join(store.runDir(this.issuePath, this.runId), 'checks')}, one directory per check (a check record's \`dir\`), each command's full .log and .stdout, the base drive under base-*. When a criterion needs a test name, a timing or a log line the summary does not hold, read it there and quote it; do not report it as unreadable or ask for it.`)
     }
     if (recheck) {
       // The re-review is judged on the drive its findings awaited: quoted here

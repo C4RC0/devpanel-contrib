@@ -513,6 +513,7 @@ export default async function (t) {
     // A tactical seat's scratch is its own subdirectory of the run's scratch.
     t.ok('the seat\'s scratch directory is an allowed root', tooling?.allowedRoots.includes(path.join(engine.run.workspace.scratchPath, working.meta.role)))
     t.ok('and the prompt states the scope', working?.prompt.includes('Source workspace:') && working.prompt.includes(f.projectPath))
+    t.ok('the run\'s check logs are a read-only root of every working seat', tooling?.allowedRoots.includes(path.join(f.issuePath, 'runs', engine.runId, 'checks')))
     await releaseWorkspace(engine)
   }
 

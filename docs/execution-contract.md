@@ -613,6 +613,13 @@ in their diagnostics rather than claim more than they enforce, and the
 recorded policy is what an auditor checks a transcript against. Check
 commands themselves run only in the rebuilt candidate.
 
+Beside the configured roots, every working seat may read the run's `evidence/`
+and `checks/` directories (read-only). Once a check exists, its prompt names
+`checks/`: each check's directory holds every command's full `.log` and
+`.stdout`, the base drive under `base-*`. A seat that needs a test name, a
+timing or a log line the summary does not carry reads and quotes it there,
+rather than asking the operator whether a criterion may be accepted without it.
+
 **Policy and outcome are separate fields.** Mixing them lets an unreachable host
 quietly rewrite a requirement, which is precisely what must not happen.
 
