@@ -61,7 +61,8 @@ export function summariseEvent (event) {
     return {
       type: 'issues-changed',
       project: event.project ?? null,
-      openIssues: issues.length,
+      openIssues: event.total ?? issues.length,
+      ...(event.removed ? { removed: event.removed } : {}),
       issues: issues.slice(0, MAX_ISSUES).map((i) => ({ id: i.id, name: i.name, status: i.status, priority: i.priority?.value ?? null, latestRun: i.latestRun ? { playbook: i.latestRun.playbook, status: i.latestRun.status } : null }))
     }
   }

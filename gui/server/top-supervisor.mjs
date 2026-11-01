@@ -1,3 +1,4 @@
+import { issuesChanged, issuesPage, overviewFor, readResult, shapeResult } from './supervisor-payload.mjs'
 import { classifyFailure } from './runtime/failure.mjs'
 import { fallbackCandidates } from './runtime/model-fallback.mjs'
 import { writeAtomic } from './runtime/persistence.mjs'
@@ -35,11 +36,11 @@ Return exactly one JSON object: {"message":"text for the user", "action":null OR
 Available actions:
 deploy_staging {project,issueId};
 inspect_environment {project,environment,resource};
-list_issues {project}; get_issue {project,issueId}; get_run {project,issueId,runId}; get_check_log {project,issueId,runId,check,command} (check is the zero-padded directory number, e.g. 004; command is the recorded command id, e.g. admin-context-selftest; use this for check logs, which are not issue-step files); get_step {project,issueId,runId,step}; get_file {project,issueId,step,name};
+list_issues {project,offset?,limit?} (a page of rows, 50 by default; next names the following page); get_result {resultId,offset?} (reads on in a result shown truncated, by its JSON text); get_issue {project,issueId}; get_run {project,issueId,runId}; get_check_log {project,issueId,runId,check,command} (check is the zero-padded directory number, e.g. 004; command is the recorded command id, e.g. admin-context-selftest; use this for check logs, which are not issue-step files); get_step {project,issueId,runId,step}; get_file {project,issueId,step,name};
 preview {project,issueId,playbook,runOptions:{}} (runOptions.accumulate:true gives the run what earlier runs of the issue produced — e.g. an implementation of an analysis's findings; without it a run sees only the report and notes);
 refresh_checks_run {project,issueId,runId} (for a retained code run blocked at closure, or stopped only by failed checks on a revision every auditor approved (blockedReason checks-failed-unchanged; checks-inconclusive, where the base's own selftest run did not finish, so refresh drives a fresh base and an author round would change nothing; or rounds-exhausted with supportedActions including "refresh-checks") after operator testDrive configuration changes; runs the installed checks against the unchanged candidate and requests fresh coordinator confirmation; never waives an unmet criterion); reconcile_delivery_run {project,issueId,runId} (for a run you own whose supportedActions include "reconcile-delivery": its approved patch was refused delivery because the source changed the patch's own paths; the engine merges that patch three-way onto the current source, resolves a conflict only on a path the project declares workspace.reconcile append (keeping the source and appending the candidate's added lines), refuses any other conflict or any change to the reviewed delta, reruns the configured checks on the merged candidate, carries the approvals and delivers; a refusal leaves the run blocked with the paths listed, and a new run of the issue still starts from the approved patch); continue_run {project,issueId,runId,instruction} (for a run you own whose supportedActions include "continue": it stopped at closure with its candidate retained; the author gets another round in the same worktree and sessions, with your instruction, the closure record and the issue notes added since the run began; use it when the record shows what to fix, e.g. a failed or crashed test drive; never to waive a criterion); retry_input_run {project,issueId,runId} (only for a failed run with a confirmed input_too_large rejection and clear integrity; continues the existing run with bounded check evidence, preserving completed steps); recover_run {project,issueId,runId} (only for a run you own whose supportedActions include "recover": the server restarted while it was live; reconciles in-flight invocations from the runtimes' records and continues only when nothing is uncertain, otherwise reports what still needs a person); start_run {project,issueId,previewId} (an issue with a report field came from a deployment's report: its trust decides what you may start — anonymous nothing, request only triage or analysis, fault per its reporter; the refusal says which, and the rest is an operator's); stop_run {project,issueId,runId}; answer_run {project,issueId,runId,answer,pauseId} (copy pause.id from the run you inspected) (only for a run with status paused; when pause.options is set the answer must be exactly one of them; decide from evidence you have read, and when it is not enough, read more (get_step, get_check_log, an inquiry) before asking; ask the user only for a reserved decision);
 ask_operator {question, project?, issueId?, options?} (records a question for the operator: options is an optional list of up to 6 short exact answers; name the project and issueId it concerns when there is one; the result gives its questionId);
-overview {} (every project: open issues with age and priority, and what past runs did);
+overview {stats?} (every project: open issues with age and priority, and what past runs did; the per-configuration and per-seat statistics only with stats: ["byPlaybook"], ["bySeat"] or true);
 readiness {project,issueId?,playbook?,runOptions?} (conditions read RIGHT NOW; reserves nothing and spends no allowance). Without a playbook it answers baselineReady: repository, ownership and budget — what holds for any configuration, which is NOT launchability. Name a playbook and it also resolves that configuration and evaluates its base policy (DIRTY_BASE and the like), reported under configuration with its configHash, the observed head and source fingerprint, and observedAt. Never say a run is runnable on a baseline reading alone; say what you checked. An observation is not a guarantee and not a preview: the checkout can move afterwards, and start_run re-checks everything itself;
 add_note {project,issueId,text}; create_issue {project,input,fromInquiry?:{inquiryId,runId,key}}; archive_issue {project,issueId};
 inquire {project,question,relatedIssue?,runOptions?:{participants}}; get_inquiry {project,inquiryId}; close_inquiry {project,inquiryId,runId,reason}; acknowledge_inquiry {project,inquiryId,runId}; reopen_inquiry {project,inquiryId,reason};
@@ -236,7 +237,7 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
       // about first.
       case 'overview': {
         if (!tools.overview) throw fail('Overview is not available in this service')
-        return tools.overview({ focus: state.focus ?? [] })
+        return overviewFor(await tools.overview({ focus: state.focus ?? [] }), { stats: a.stats ?? false })
       }
       // Current conditions, read now and taking nothing. Admission checks the
       // budget first and stops there, so a blocked supervisor never re-reads the
@@ -254,7 +255,8 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
         if (!tools.setDependencies) throw fail('Dependencies are not available in this service')
         return absorb(a.project, tools.setDependencies(a))
       }
-      case 'list_issues': return tools.listIssues(a.project)
+      case 'list_issues': return issuesPage(await tools.listIssues(a.project), { project: a.project, offset: a.offset, limit: a.limit })
+      case 'get_result': return readResult({ dir, resultId: a.resultId, offset: a.offset })
       case 'get_issue': return tools.getIssue(a.project, a.issueId)
       case 'get_run': return tools.getRun(a.project, a.issueId, a.runId)
       case 'get_check_log': return tools.getCheckLog(a)
@@ -553,6 +555,7 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
           // do not say who can act on it, and that is what decides the next move.
           try { if (controller.signal.aborted) throw fail('Supervisor stopping'); result = await act(answer.action) }
           catch (e) { result = { error: e.message, ...(e.code ? { code: e.code } : {}), ...(e.resolvableBy ? { resolvableBy: e.resolvableBy } : {}), ...(e.pregate ? { pregate: e.pregate } : {}) } }
+          result = await shapeResult(answer.action, result, { dir }).catch(() => result)
           message('tool', JSON.stringify(result), { action: answer.action })
           // First in line, not last: an operator message or a woken event queued
           // while this call ran would otherwise be delivered in its place, and
@@ -703,8 +706,9 @@ export async function createTopSupervisor ({ dir, models, adapter, tools, emit =
         const issues = await tools.listIssues(project)
         const fingerprint = JSON.stringify(issues.map(i=>({id:i.id,status:i.status,name:i.name})))
         if (state.observedIssues[project] !== fingerprint) {
+          const previous = state.observedIssues[project]
           state.observedIssues[project] = fingerprint
-          await enqueue({type:'issues-changed',project,issues})
+          await enqueue(issuesChanged(project, previous, issues))
         }
       }
       // Nothing is held for ever: past the limit, what was deferred wakes on its own.

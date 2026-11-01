@@ -505,7 +505,10 @@ answered — one that takes reading source, logs or data — becomes an
 `overview {}` returns the whole panel in one bounded reading: every project, its
 open issues with age and priority, and what past runs actually did. It exists
 because a supervisor that has to ask project by project ends up reasoning about
-whichever project it happened to look at first.
+whichever project it happened to look at first. The per-configuration and
+per-seat statistics (`byPlaybook`, `bySeat`, 98% of a full reading) are left out
+unless asked for with `overview {stats: ["byPlaybook"] | ["bySeat"] | true}`;
+`statsOmitted` counts the groups left out and says how to ask.
 
 Four things it is careful about, because each is a way to be confidently wrong:
 
@@ -899,6 +902,26 @@ supervisor continues a run at most once (`MAX_CONTINUES` in
 `gui/server/top-supervisor.mjs`); a second request is refused and the decision
 (accept, amend the criterion, or stop) goes to the operator through
 `ask_operator`.
+
+### What a result costs the session
+
+Every tool result enters the supervisor's native session and is re-read on every
+later call, so each is shaped for it (`gui/server/supervisor-payload.mjs`), and
+nothing is dropped without saying so:
+
+- An issue mutation (`set_disposition`, `archive_issue`, `set_priority`,
+  `set_dependencies`, `create_issue`, `mark_landed`) returns an acknowledgement:
+  `change`, the issue's row as it now stands, and any `warnings`, not the issue
+  with its steps.
+- `list_issues {project, offset?, limit?}` returns a page of rows (50 by default,
+  at most 200) with `total`, `omitted` and the call for the `next` page.
+- A preview names each check command by id, kind and report, without its shell
+  text (the project's configuration and the run's check record hold that).
+- An `issues-changed` event carries the rows that were added or changed (with
+  `change`) and the ids `removed`, beside the `total`; not the whole list again.
+- Any result still over 40,000 characters is kept whole under
+  `issues/.supervisor/results/` and shown as its first page with `truncated`,
+  `resultId` and `next`: `get_result {resultId, offset}` reads on by its JSON text.
 
 `get_check_log {project, issueId, runId, check, command}` reads the bounded tail
 of an engine-recorded command log. `check` is the zero-padded check directory

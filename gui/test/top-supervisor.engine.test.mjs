@@ -11,7 +11,7 @@ export default async function(t){
  const p=JSON.parse(args.prompt),e=p.event;let action=null;const project=p.focus[0]??p.projects[0].id;
  switch(++turn){
  case 1:action={type:'list_issues',project};break;
- case 2:action={type:'get_issue',project,issueId:e.result[0].id};break;
+ case 2:action={type:'get_issue',project,issueId:e.result.issues[0].id};break;
  case 3:action={type:'preview',project,issueId:e.result.issue.id,playbook:'implementation'};break;
  case 4:action={type:'start_run',project,issueId:e.action.issueId,previewId:e.result.previewId};break;
  }

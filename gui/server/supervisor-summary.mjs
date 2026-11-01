@@ -118,6 +118,21 @@ export function summariseStep (detail, number, response) {
 }
 
 /** A preview, without the rendered prompt bodies. */
+/*
+ * A check target as a decision needs it: which commands, in which tier, gating
+ * or not. Their shell text (11k for one project, repeated under testDrive) is
+ * the projects/<id>.yaml configuration; the run's check record and
+ * get_check_log hold what each command did.
+ */
+const compactCommand = (c) => ({ id: c.id, ...(c.required === false ? { required: false } : {}), ...(c.kind ? { kind: c.kind } : {}), ...(c.report ? { report: c.report } : {}) })
+function compactTarget (target) {
+  if (!target || typeof target !== 'object') return target ?? null
+  const out = { ...target }
+  for (const key of ['commands', 'finallyCommands']) if (Array.isArray(out[key])) out[key] = out[key].map(compactCommand)
+  if (out.baselineCache?.environment) out.baselineCache = { ...out.baselineCache, environment: 'configured (a command)' }
+  return out
+}
+
 export function summarisePreview (preview) {
   if (!preview?.ok) return preview
   return {
@@ -133,8 +148,8 @@ export function summarisePreview (preview) {
     participants: (preview.participants ?? []).map((p) => ({ role: p.role, model: p.model, harness: p.connection?.harness ?? null, effort: p.effort, verification: p.verification })),
     phases: (preview.phases ?? []).map((p) => ({ id: p.id, kind: p.kind, maxRounds: p.loop?.maxRounds ?? null, steps: p.steps.map((s) => `${s.role}:${s.id}`) })),
     workspace: preview.workspace ?? null,
-    checks: preview.checks ?? null,
-    infrastructure: preview.infrastructure ?? null,
+    checks: preview.checks ? { ...preview.checks, target: compactTarget(preview.checks.target) } : null,
+    infrastructure: preview.infrastructure ? { ...preview.infrastructure, ...(preview.infrastructure.testDrive ? { testDrive: compactTarget(preview.infrastructure.testDrive) } : {}) } : null,
     autoClose: preview.autoClose ?? null,
     delivery: preview.delivery ?? null,
     limits: preview.limits ?? null,
