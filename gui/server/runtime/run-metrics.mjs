@@ -65,7 +65,8 @@ function checkIntervals (run) {
 
 /**
  * Time, five ways that add up to the elapsed time:
- *  - agentMs        turns of every non-operator seat, asked → answered
+ *  - agentMs        turns of every non-operator seat, asked → answered, as a union: concurrent
+ *                   reviewers of one round count once (`seatMs` is their sum, the seats' own time)
  *  - operatorWaitMs the run stood paused on a question for a person (decision steps, an open question)
  *  - suspendedMs    the run stood stopped (budget block, manual pause, failure) until resumed or retried
  *  - waitingForChecksMs  checks ran and no seat turn did: the run waited on its checks
@@ -84,7 +85,7 @@ function timeSplit (run, now) {
   const started = ms(run.startedAt)
   const ended = ms(run.endedAt) ?? now
   const elapsedMs = started != null && ended >= started ? ended - started : null
-  let agentMs = 0, unknownSteps = 0
+  let seatMs = 0, unknownSteps = 0, unplacedMs = 0
   const waits = []
   const turns = []
   for (const s of run.steps ?? []) {
@@ -93,10 +94,14 @@ function timeSplit (run, now) {
       if (w) waits.push(w); else unknownSteps++
       continue
     }
-    turns.push(interval(ms(s.startedAt), ms(s.endedAt)))
-    if (typeof s.durationMs === 'number') agentMs += s.durationMs
-    else { const a = ms(s.startedAt), b = ms(s.endedAt); if (a != null && b != null && b >= a) agentMs += b - a; else unknownSteps++ }
+    const turn = interval(ms(s.startedAt), ms(s.endedAt))
+    turns.push(turn)
+    if (typeof s.durationMs === 'number') { seatMs += s.durationMs; if (!turn) unplacedMs += s.durationMs }
+    else if (turn) seatMs += turn.to - turn.from
+    else unknownSteps++
   }
+  // A turn with a duration but no interval cannot be overlapped with anything; it counts whole.
+  const agentMs = unionMs(turns.filter(Boolean)) + unplacedMs
   const suspensions = []
   // Completed waits are on decision steps; an open question is not answered
   // yet, so the engine has not folded it into any total.
@@ -138,7 +143,7 @@ function timeSplit (run, now) {
   const checksAloneMs = checksMs - overlapMs(checks, [...seatTurns, ...waits, ...suspensions.filter(Boolean)])
   const remainder = elapsedMs == null ? null : elapsedMs - agentMs - operatorWaitMs - suspendedMs - checksAloneMs
   return {
-    elapsedMs, agentMs, operatorWaitMs, suspendedMs, checksMs, waitingForChecksMs,
+    elapsedMs, agentMs, seatMs, operatorWaitMs, suspendedMs, checksMs, waitingForChecksMs,
     otherMs: remainder == null ? null : Math.max(0, remainder),
     // A negative remainder means the parts exceed the whole: the record is
     // inconsistent and the split must not be trusted for this run.
@@ -147,7 +152,7 @@ function timeSplit (run, now) {
     waitsInControlTotalMs,
     unknownSteps,
     basis,
-    means: 'agent turns, waits on a question and suspensions are disjoint intervals unioned from the record; checksMs is the union of every recorded check run (overlap with seat turns counted once), waitingForChecksMs the part of it during which no seat turn ran, and otherMs excludes that part; a turn still in flight counts as a seat turn until now, and the engine\'s work between check runs stays in otherMs; overlappingSuspensionMs is recorded suspension that lay inside a wait and was counted as the wait; waitsInControlTotalMs is answered waiting the engine also folded into controlSuspendedMs, counted here once as waiting; suspendedMs "inferred" means an older record carried only a total; inconsistentMs > 0 means the parts exceed the elapsed time'
+    means: 'agent turns, waits on a question and suspensions are disjoint intervals unioned from the record (seatMs is the seats\' own time summed: concurrent reviewers each count); checksMs is the union of every recorded check run (overlap with seat turns counted once), waitingForChecksMs the part of it during which no seat turn ran, and otherMs excludes that part; a turn still in flight counts as a seat turn until now, and the engine\'s work between check runs stays in otherMs; overlappingSuspensionMs is recorded suspension that lay inside a wait and was counted as the wait; waitsInControlTotalMs is answered waiting the engine also folded into controlSuspendedMs, counted here once as waiting; suspendedMs "inferred" means an older record carried only a total; inconsistentMs > 0 means the parts exceed the elapsed time'
   }
 }
 
@@ -353,7 +358,7 @@ export function seatMetrics (run, role) {
  */
 export function emptyMetricsTotals () {
   return {
-    measured: 0, agentMs: 0, operatorWaitMs: 0, suspendedMs: 0, checksMs: 0, waitingForChecksMs: 0, inconsistent: 0,
+    measured: 0, agentMs: 0, seatMs: 0, operatorWaitMs: 0, suspendedMs: 0, checksMs: 0, waitingForChecksMs: 0, inconsistent: 0,
     cycleRestarts: 0, inferredRestarts: 0, ignoredRestartRequests: 0, closureReturns: 0, regressionsAfterApproval: 0,
     planReviewRoundExecutions: { total: 0, counted: 0 },
     seat: null
@@ -365,6 +370,7 @@ export function absorbMetrics (into, run, { role = null } = {}) {
   if (!m) return into
   into.measured++
   into.agentMs += m.time.agentMs
+  into.seatMs += m.time.seatMs
   into.operatorWaitMs += m.time.operatorWaitMs
   into.suspendedMs += m.time.suspendedMs
   into.checksMs += m.time.checksMs
@@ -391,6 +397,7 @@ export function reportMetrics (totals) {
   return {
     ...totals,
     meanAgentMs: mean(totals.agentMs, totals.measured),
+    meanSeatMs: mean(totals.seatMs, totals.measured),
     meanOperatorWaitMs: mean(totals.operatorWaitMs, totals.measured),
     meanChecksMs: mean(totals.checksMs, totals.measured),
     meanWaitingForChecksMs: mean(totals.waitingForChecksMs, totals.measured),
@@ -398,6 +405,6 @@ export function reportMetrics (totals) {
     seat: totals.seat ? { ...totals.seat, meanAgentMs: mean(totals.seat.agentMs, totals.measured) } : null,
     means: totals.seat
       ? 'whole-run figures (agentMs, operatorWaitMs, checksMs, restarts…) describe the runs this seat·model took part in — a participation cohort, not the seat\'s effort; `seat` is the seat\'s own turns and agent time'
-      : 'agent time, operator wait and suspended time are separate; checksMs is all check time and waitingForChecksMs the part no seat turn overlapped; cycle restarts and ignored restart requests count beside round executions, never inside them; inferredRestarts says how many runs\' restart counts came from an older record without reset marks; regressionsAfterApproval totals checks that failed on an already approved revision'
+      : 'agent time (agentMs, concurrent turns once; seatMs, each seat\'s own), operator wait and suspended time are separate; checksMs is all check time and waitingForChecksMs the part no seat turn overlapped; cycle restarts and ignored restart requests count beside round executions, never inside them; inferredRestarts says how many runs\' restart counts came from an older record without reset marks; regressionsAfterApproval totals checks that failed on an already approved revision'
   }
 }

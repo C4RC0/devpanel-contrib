@@ -107,6 +107,18 @@ export default async (t) => {
     t.eq('turns are counted by who took them', [m.turns.total, m.turns.agent, m.turns.operator, m.turns.repairs], [run.steps.length, run.steps.length - 1, 1, 2])
   }
 
+  t.section('   …two reviewers of one round side by side count once in agentMs, each in seatMs')
+  {
+    n = 0
+    const steps = [step({ stepId: 'implement', role: 'implementer', phase: 'implement-review', from: 0, minutes: 10 }),
+      step({ stepId: 'audit-implement-1', role: 'auditor-1', phase: 'implement-review', from: 10, minutes: 5 }),
+      step({ stepId: 'audit-implement-2', role: 'auditor-2', phase: 'implement-review', from: 10, minutes: 4 })]
+    const side = runMetrics({ startedAt: at(0), endedAt: at(15), status: 'completed', steps }, { now: Date.parse(at(15)) })
+    t.eq('agentMs is the wall time seats worked', side.time.agentMs, 15 * 60_000)
+    t.eq('seatMs is what the seats spent', side.time.seatMs, 19 * 60_000)
+    t.eq('and the split still adds up, consistently', [side.time.otherMs, side.time.inconsistentMs], [0, 0])
+  }
+
   t.section('   …an older record with only the total infers the suspension, and says so')
   {
     const old = runMetrics({ ...run, resumeHistory: [] })
