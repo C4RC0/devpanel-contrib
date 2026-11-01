@@ -1280,7 +1280,11 @@ identity, so committing in it or reaching the live checkout would change what th
 fingerprint measures. The top-level
 supervisor's start gate reads `started === false` and releases the concurrency
 slot rather than holding it as uncertain, and records the unchanged input as a
-failed launch, so the same start is not retried blindly.
+failed launch, so the same start is not retried blindly. A preflight refused with
+no failure, only unproven findings (a probe that timed out or was cancelled), is
+not recorded: it says nothing about the inputs, so the same start may pass, and
+`maxStartsPerIssue` still bounds the retries. `run.preflight.counts`
+(`failures`, `unproven`) carries the distinction; a record without it is guarded.
 
 What this gate does **not** judge is cleanliness. A dirty checkout is a legitimate
 start under `working-tree`, and refusing it under `head` is the base policy's

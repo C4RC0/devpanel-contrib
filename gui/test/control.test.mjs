@@ -224,6 +224,7 @@ export default async function (t) {
     t.ok('the refusal names what was not proven',
       /unreachable|model/i.test(detail.preflight.detail ?? detail.preflight.summary ?? ''),
       (detail.preflight.detail ?? '').split('\n')[1] ?? detail.preflight.summary)
+    t.ok('and counts its failures as a number, so a real failure stays guarded', detail.preflight.counts?.failures > 0, JSON.stringify(detail.preflight.counts))
     t.eq('no workspace was created for it', detail.workspace.state, 'pending')
 
     // A failed start must not leave the issue locked.

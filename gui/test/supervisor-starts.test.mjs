@@ -286,6 +286,35 @@ export default async function (t) {
       t.eq('refresh records the ending on the launch and the owned run', [state.launches[0].status, owned.status], ['finished', 'failed'])
       t.eq('but the poll baseline still holds what monitoring last saw, so the poll reports the change', owned.observedStatus, 'preflighting')
     }
+
+    t.section('a preflight refused only for want of proof does not guard the unchanged start')
+    {
+      const state = fresh({ maxStartsPerIssue: 3 })
+      let counts = { failures: 0, unproven: 2 }, launched = 0
+      const gate = createStartGate({ getState: () => state, save: async () => {}, tools: {
+        getRun: async () => ({ status: 'failed', blockedReason: 'preflight-refused', preflight: { state: 'refused', counts } }),
+        start: async () => ({ runId: `r${++launched}`, status: 'preflighting' })
+      } })
+      await gate.start(preview('a'))
+      await gate.refresh()
+      t.eq('a timed-out probe leaves no failed-launch guard', Object.keys(state.failedLaunches).length, 0)
+      await gate.start(preview('a'))
+      t.eq('so the same start is accepted again', launched, 2)
+      // Mixed: one real failure beside a timed-out probe is still a fact about the inputs.
+      counts = { failures: 1, unproven: 1 }
+      await gate.refresh()
+      t.eq('a refusal with a real failure beside an unproven one is guarded', Object.values(state.failedLaunches).map((f) => f.reason), ['preflight-refused'])
+      t.ok('and the unchanged start is refused', /Unchanged failed launch is blocked/.test((await rejected(() => gate.start(preview('a'))))?.message))
+      t.eq('no third launch was made', launched, 2)
+      const older = fresh()
+      const olderGate = createStartGate({ getState: () => older, save: async () => {}, tools: {
+        getRun: async () => ({ status: 'failed', blockedReason: 'preflight-refused', preflight: { state: 'refused', summary: '0 failure(s), 2 unproven' } }),
+        start: async () => ({ runId: 'old', status: 'preflighting' })
+      } })
+      await olderGate.start(preview('a'))
+      await olderGate.refresh()
+      t.eq('a record without counts (older runs) stays guarded as before', Object.keys(older.failedLaunches).length, 1)
+    }
   } finally {
     for (const s of services) await s.shutdown()
     await fs.rm(root, { recursive: true, force: true })

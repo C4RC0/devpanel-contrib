@@ -770,6 +770,9 @@ export async function recordPreflight (reservation, { state, result = null, usag
     summary: result
       ? `${result.failures?.length ?? 0} failure(s), ${result.unknowns?.length ?? 0} unproven`
       : run.preflight?.summary ?? null,
+    // The same counts as numbers: a refusal with no failure only lacked proof (a probe timed out or was
+    // cancelled), and the supervisor's start gate does not block an unchanged retry of that (supervisor-starts.mjs).
+    ...(result ? { counts: { failures: result.failures?.length ?? 0, unproven: result.unknowns?.length ?? 0 } } : {}),
     detail,
     // Unfenced operation, as preflight found it (macOS under its opt-in).
     ...(result?.fence ? { fence: result.fence } : {})

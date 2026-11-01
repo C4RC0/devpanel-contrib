@@ -145,6 +145,9 @@ function failed (run) {
     // The first line of the refusal only says that it refused; the lines after
     // it name the tool and model that failed.
     const lines = String(run.preflight?.detail ?? '').split('\n').map((l) => l.trim()).filter((l) => l && !/^refusing to launch/.test(l))
+    if (run.preflight?.counts?.failures === 0 && run.preflight.counts.unproven > 0) {
+      return { headline: "Couldn't start: a pre-start check got no answer", detail: 'Nothing failed and no agent was run; a probe timed out or was cancelled.', cause: lines.join('\n') || null, next: 'Start again; the same start is allowed.' }
+    }
     return { headline: "Couldn't start: the AI tools failed their pre-start check", detail: 'No agent was run.', cause: lines.join('\n') || null, next: 'Fix what the check reported (a login, an install, a model name), then start again.' }
   }
   const launch = launchFailure(run.blockedReason)

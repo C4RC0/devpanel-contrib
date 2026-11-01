@@ -19,6 +19,9 @@ export default async function (t) {
   t.eq('an unknown refusal is quoted as the cause', unknown.cause, 'something new broke')
   t.eq('a preflight refusal quotes what failed, not that it refused',
     explainRun({ status: 'failed', blockedReason: 'preflight-refused', preflight: { detail: 'refusing to launch: x\n  fail: codex/m: denied' } }).cause, 'fail: codex/m: denied')
+  const unproven = explainRun({ status: 'failed', blockedReason: 'preflight-refused', preflight: { counts: { failures: 0, unproven: 1 }, detail: 'refusing to launch: x\n  unproven: codex: authentication unknown — probe cancelled or timed out' } })
+  t.eq('a refusal with nothing failed says the check got no answer', unproven.headline, "Couldn't start: a pre-start check got no answer")
+  t.ok('and that the same start may be made again', /Start again/.test(unproven.next), unproven.next)
 
   t.section('runtime failures are classified')
   const auth = explainRun({ status: 'failed', failure: { class: 'auth', role: 'coordinator', message: 'login expired' }, participants: { coordinator: { model: 'opus' } } })

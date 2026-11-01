@@ -164,7 +164,10 @@ export function createStartGate ({ getState, save, tools, stopping = () => false
     const owned = state.ownedRuns.find((r) => r.runId === attempt.runId && r.project === attempt.project && r.issueId === attempt.issueId)
     if (owned) owned.status = run.status
     const failure = ['failed', 'blocked'].includes(run.status) ? (run.blockedReason ?? run.status) : null
-    if (failure && attempt.failureObserved !== failure) recordFailure(state, attempt, failure)
+    // A preflight refused only for want of proof (a probe timed out) is not a fact about the inputs, so
+    // the same start may succeed and is not guarded; maxStartsPerIssue still bounds the retries.
+    const unproven = failure === 'preflight-refused' && run.preflight?.counts?.failures === 0 && run.preflight.counts.unproven > 0
+    if (failure && !unproven && attempt.failureObserved !== failure) recordFailure(state, attempt, failure)
     attempt.failureObserved = failure
     if (!live.includes(run.status)) {
       // A run that has stopped has a final cost. Settling here, where its
